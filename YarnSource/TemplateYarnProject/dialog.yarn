@@ -1,0 +1,29 @@
+title: Setup
+---
+// Declaring variables to be used later
+<<declare $visitedTest3 = false>>
+===
+title: Test1
+---
+//The node has to relate to the character's name.
+//Nothing stopping there being multiple dialog files!
+Test1: Hi there!
+Test1: I'm Test1, the first test character
+===
+title: Test2
+---
+Test2: This is the second test
+Test2: I hope this works better!
+===
+title: Test3
+---
+<<if CheckInventory("Player","Spanner") == true>>
+    Test3: Hey, you found my spanner!
+    Test3: Thanks bud.
+<<elseif $visitedTest3== false>>
+    Test3: Hey, could you get my Spanner for me?
+    <<set $visitedTest3 = true>>
+<<elseif $visitedTest3 == true>>
+    Test3: You found my Spanner yet?
+<<endif>>
+===
