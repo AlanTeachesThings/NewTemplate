@@ -54,7 +54,7 @@ title: Jeff
 ---
 <<if $foundWrench == true>>
     Jeff: Hey buddy, what's happening?
-    ->  Do you want your wrench back? <<if CheckInventory("Player", "Wrench")>>
+    ->  Do you want your wrench back? <<if CheckInventory("Player", "Wrench") == true>>
         Jeff: Thanks buddy! I love this thing.
         <<TradeItem "Player" "Jeff" "Wrench" 1>>
     ->  Can I borrow the wrench for a bit? <<if CheckInventory("Player", "Wrench") == false>>
