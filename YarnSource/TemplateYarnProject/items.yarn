@@ -1,0 +1,30 @@
+title: ItemDeclarations
+---
+<<declare $pickup = false>>
+===
+title: Wrench
+---
+<<if $visitedJeff>>
+    <<if $pickup>>
+    You found Jeff's missing wrench!
+    <<else>>
+    This is Jeff's wrench.
+    <<endif>>
+    You should take that back to him right away.
+<<else>>
+    <<if $pickup>>
+    You found a Wrench!
+    <<else>>
+    It's a Wrench.
+    <<endif>>
+    I wonder who it belongs to?
+<<endif>>
+
+===
+title: Wood
+---
+<<if $pickup>>
+You got some Wood!
+<<endif>>
+It's just Wood.
+===
