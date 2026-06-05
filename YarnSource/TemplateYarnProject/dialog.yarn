@@ -16,10 +16,34 @@ OptionsGuy: I'm just here to test the Options system
     OptionsGuy: That's annoying!
 
 ===
-title: Test2
+title: Jack
 ---
-Test2: This is the second test
-Test2: I hope this works better!
+Jack: Hey, how much wood you got?
+<< if CheckInventory("Player", "Wood")>>
+    <<if CheckStackCount("Player", "Wood") > 3>>
+    Jack: Wow, you got loads!
+    <<else>>
+    Jack: Well, you got some I suppose.
+    <<endif>>
+    Jack: Could I maybe have, like two?
+    ->  You got more than me, you give me one! <<if CheckStackCount("Jack", "Wood") > CheckStackCount("Player", "Wood")>>
+        Jack: Oh, go on then.
+        <<TradeItem "Jack" "Player" "Wood" 1>>
+    ->  Sure
+        <<declare $tradeAmount = 0>>
+        <<set $tradeAmount = TryTradeItem("Player","Jack","Wood",2)>>
+        <<if $tradeAmount == 2>>
+            Jack: Thanks bro, you're too kind
+            <<elseif $tradeAmount == 1>>
+            Jack: Well, if that's all you got I appreciate it.
+            <<else>>
+            Jack: Guess not. That's cool though.
+        <<endif>>
+    ->  Sorry, no can do
+        Jack: That's okay, maybe next time.
+<<else>>
+Jack: Aw man, you got nothing.
+<<endif>>
 ===
 title: Jeff
 ---
