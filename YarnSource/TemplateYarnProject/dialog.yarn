@@ -21,10 +21,13 @@ title: Jack
 Jack: Hey, how much wood you got?
 << if CheckInventory("Player", "Wood")>>
     <<if CheckStackCount("Player", "Wood") > 3>>
-    Jack: Wow, you got loads!
+    <<Action "Jack" "Cheer">>
+    Jack: Wow, you got {string(CheckStackCount("Player", "Wood"))}!
     <<else>>
-    Jack: Well, you got some I suppose.
+    <<Action "Jack" "Shrug">>
+    Jack: Wait, you only got {string(CheckStackCount("Player", "Wood"))}?
     <<endif>>
+    <<Action "Jack" "Think">>
     Jack: Could I maybe have, like two?
     ->  You got more than me, you give me one! <<if CheckStackCount("Jack", "Wood") > CheckStackCount("Player", "Wood")>>
         Jack: Oh, go on then.
@@ -33,8 +36,10 @@ Jack: Hey, how much wood you got?
         <<declare $tradeAmount = 0>>
         <<set $tradeAmount = TryTradeItem("Player","Jack","Wood",2)>>
         <<if $tradeAmount == 2>>
+            <<Action "Jack" "Cheer">>
             Jack: Thanks bro, you're too kind
             <<elseif $tradeAmount == 1>>
+            <<Action "Jack" "Shrug">>
             Jack: Well, if that's all you got I appreciate it.
             <<else>>
             Jack: Guess not. That's cool though.
@@ -66,10 +71,12 @@ title: Jeff
 <<elseif CheckInventory("Player","Wrench") == true>>
     <<set $visitedJeff = true>>
     <<set $foundWrench = true>>
+    <<Action "Jeff" "Cheer">>
     Jeff: Hey, you found my wrench!
     Jeff: Gimme gimme.
     <<TradeItem "Player" "Jeff" "Wrench" 1>>
 <<elseif $visitedJeff== false>>
+    <<Action "Jeff" "Think">>
     Jeff: Hey, could you get my wrench for me?
     <<set $visitedJeff = true>>
 <<elseif $visitedJeff == true>>
