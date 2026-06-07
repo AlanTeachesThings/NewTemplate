@@ -8,6 +8,10 @@ Characters inheriting from the base ThirdPersonCharacter_BP have a "YarnCharacte
 
 The Camera presenter will snap directly to the speaking character based on the defined Speaker Name in Yarn code.
 
+Camera Tags
+===========
+#OffScreen - tells camera system not to switch view to the character for this line
+
 Inventory Functions
 ==================
 CheckInventory("YarnCharacterName","ItemName") - returns BOOL - Checks specified character's inventory for specific item, returns TRUE if found.
