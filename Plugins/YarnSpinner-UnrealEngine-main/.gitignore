@@ -6,6 +6,9 @@ Intermediate/
 !Build/
 DerivedDataCache/
 
+# Whitelist DLLS?
+!*.dll
+
 # Saved data
 Saved/
 
