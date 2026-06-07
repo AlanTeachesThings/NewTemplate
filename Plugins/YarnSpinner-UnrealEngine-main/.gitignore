@@ -1,9 +1,9 @@
 # Unreal Engine
 
 # Build artifacts
-Binaries/
+!Binaries/
 Intermediate/
-Build/
+!Build/
 DerivedDataCache/
 
 # Saved data
