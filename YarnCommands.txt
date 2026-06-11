@@ -16,6 +16,7 @@ Inventory Functions
 ==================
 CheckInventory("YarnCharacterName","ItemName") - returns BOOL - Checks specified character's inventory for specific item, returns TRUE if found.
 CheckStackCount("YarnCharacterName","ItemName") - returns INT - Checks specified character's inventory for specific item, returns stack size (0 if not found).
+IsItemEquipped("YarnCharacterName","ItemName") - returns BOOL - Checks to see if specified character has item equipped.
 TryTradeItem("FromCharacter","ToCharacter","ItemName","StackCount") - returns BOOL - Attempts a trade of item and returns FALSE if it fails, true if it succceeds (partial trades return TRUE)
 TryAddItem("YarnCharacterName","ItemName","StackCount") - returns BOOL - Attempts to add item and returns FALSE if it fails, TRUE if it succeeds
 TryRemoveItem("YarnCharacterName","ItemName","StackCount") - returns BOOL - Attempts to remove item and returns FALSE if it fails, TRUE if it succeeds
@@ -25,6 +26,7 @@ Inventory Commands
 TradeItem("FromCharacter","ToCharacter","ItemName","StackCount") - Removes specified item/stack from FROM Character's Inventory and adds it to TO Character's Inventory
 AddItem("YarnCharacterName","ItemName","StackCount") - Adds specified item/stack to specified character's inventory
 RemoveItem("YarnCharacterName","ItemName","StackCount") - Removes specified item/stack from specified character's inventory
+EquipItem("YarnCharacterName","ItemName") - Equips the specified item on the specified character (item must be in their inventory first!)
 
 Action Commands
 ==============

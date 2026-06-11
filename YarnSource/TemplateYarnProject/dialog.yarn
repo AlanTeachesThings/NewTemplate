@@ -74,9 +74,14 @@ title: Jeff
     <<set $visitedJeff = true>>
     <<set $foundWrench = true>>
     <<Action "Jeff" "Cheer">>
-    Jeff: Hey, you found my wrench!
+    <<if IsItemEquipped("Player","Wrench")>>
+        Jeff: Is that my wrench?
+    <<else>>
+        Jeff: Hey, you found my wrench!
+    <<endif>>
     Jeff: Gimme gimme.
     <<TradeItem "Player" "Jeff" "Wrench" 1>>
+    <<EquipItem "Jeff" "Wrench">>
 <<elseif $visitedJeff== false>>
     <<Action "Jeff" "Think">>
     Jeff: Hey, could you get my wrench for me?

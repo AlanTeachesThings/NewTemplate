@@ -28,3 +28,12 @@ You got some Wood!
 <<endif>>
 It's just Wood.
 ===
+title: Axe
+---
+<<if $pickup>>
+You got a Fire Axe!
+<<else>>
+It's a Fire Axe!
+<<endif>>
+Careful what you do with that thing!
+===
