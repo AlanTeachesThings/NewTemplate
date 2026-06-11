@@ -23,11 +23,11 @@ title: Jack
 Jack: Hey, how much wood you got?
 << if CheckInventory("Player", "Wood")>>
     <<if CheckStackCount("Player", "Wood") > 3>>
-    <<Action "Jack" "Cheer">>
-    Jack: Wow, you got {string(CheckStackCount("Player", "Wood"))}!
+        <<Action "Jack" "Cheer">>
+        Jack: Wow, you got {string(CheckStackCount("Player", "Wood"))}!
     <<else>>
-    <<Action "Jack" "Shrug">>
-    Jack: Wait, you only got {string(CheckStackCount("Player", "Wood"))}?
+        <<Action "Jack" "Shrug">>
+        Jack: Wait, you only got {string(CheckStackCount("Player", "Wood"))}?
     <<endif>>
     <<Action "Jack" "Think">>
     Jack: Could I maybe have, like two?
