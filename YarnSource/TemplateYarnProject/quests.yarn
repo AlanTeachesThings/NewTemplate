@@ -1,0 +1,23 @@
+title: QuestDeclarations
+---
+// A space to declare variables for use in Quests
+<< declare $headline = false>>
+===
+title: JeffsWrench
+---
+<<if $headline>>
+    <<if $visitedJeff>>
+        Find Jeff's wrench
+    <<else>>
+        Find whose wrench this is
+    <<endif>>
+<<else>>
+    <<if $foundWrench and $visitedJeff>>
+        You found Jeff's wrench and took it back to him.
+    <<else>>
+        You found a wrench. <<if $foundWrench and not($visitedJeff)>>
+        Jeff said he was looking for his wrench. <<if $visitedJeff>>
+        You found it. You should probably take it back to him. <<if $foundWrench and $visitedJeff>>
+    <<endif>>
+<<endif>>
+===
