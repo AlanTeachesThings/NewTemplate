@@ -7,10 +7,12 @@ title: Wrench
 <<if $visitedJeff>>
     <<if $pickup>>
     You found Jeff's missing wrench!
+    <<UpdateQuest "JeffsWrenchFind" true>>
     <<else>>
     This is Jeff's wrench.
     <<endif>>
     You should take that back to him right away.
+    <<AddQuest "JeffsWrenchDeliver" false>>
 <<else>>
     <<if $pickup>>
     You found a Wrench!

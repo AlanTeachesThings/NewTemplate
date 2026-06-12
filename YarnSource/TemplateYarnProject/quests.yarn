@@ -15,7 +15,7 @@ title: JeffsWrench
     <<if $foundWrench and $visitedJeff>>
         You found Jeff's wrench and took it back to him.
     <<else>>
-        You found a wrench. <<if $foundWrench and not($visitedJeff)>>
+        You found a wreHeadlinch. <<if $foundWrench and not($visitedJeff)>>
         Jeff said he was looking for his wrench. <<if $visitedJeff>>
         You found it. You should probably take it back to him. <<if $foundWrench and $visitedJeff>>
     <<endif>>

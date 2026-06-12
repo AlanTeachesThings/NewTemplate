@@ -80,12 +80,15 @@ title: Jeff
         Jeff: Hey, you found my wrench!
     <<endif>>
     Jeff: Gimme gimme.
+    <<UpdateQuest "JeffsWrenchFind" true>>
+    <<UpdateQuest "JeffsWrenchDeliver" true>>
     <<TradeItem "Player" "Jeff" "Wrench" 1>>
     <<EquipItem "Jeff" "Wrench">>
 <<elseif $visitedJeff== false>>
     <<Action "Jeff" "Think">>
     Jeff: Hey, could you get my wrench for me?
     <<set $visitedJeff = true>>
+    <<AddQuest "JeffsWrenchFind" false>>
 <<elseif $visitedJeff == true>>
     Jeff: You found my wrench yet?
 <<endif>>
