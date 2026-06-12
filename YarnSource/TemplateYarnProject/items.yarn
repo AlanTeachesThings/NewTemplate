@@ -16,6 +16,7 @@ title: Wrench
 <<else>>
     <<if $pickup>>
     You found a Wrench!
+    <<AddQuest "JeffsWrenchFindWrench" false>>
     <<else>>
     It's a Wrench.
     <<endif>>
