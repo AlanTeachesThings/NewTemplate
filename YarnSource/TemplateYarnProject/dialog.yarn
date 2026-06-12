@@ -21,6 +21,7 @@ OptionsGuy: I'm just here to test the Options system
 title: Jack
 ---
 Jack: Hey, how much wood you got?
+<<AddQuest "JakeWantsWoodGather" false>>
 << if CheckInventory("Player", "Wood")>>
     <<if CheckStackCount("Player", "Wood") > 3>>
         <<Action "Jack" "Cheer">>
@@ -28,6 +29,7 @@ Jack: Hey, how much wood you got?
     <<else>>
         <<Action "Jack" "Shrug">>
         Jack: Wait, you only got {string(CheckStackCount("Player", "Wood"))}?
+        <<AddQuest "JakeWantsWoodGather" false>>
     <<endif>>
     <<Action "Jack" "Think">>
     Jack: Could I maybe have, like two?
