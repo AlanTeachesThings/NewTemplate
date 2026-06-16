@@ -9,8 +9,11 @@ title: OptionsGuy
 //The node has to relate to the character's name.
 //Nothing stopping there being multiple dialog files!
 OptionsGuy: Hi there!
-Jeff: Don't talk to that guy! #OffScreen
+Jeff: Hey, don't talk to that guy! #OffScreen
 Jack: Sorry about him.
+Jack: He really likes testing out the "OffScreen" line tag.
+Jack: I don't use it, that's why the camera focuses on me.
+OptionsGuy: *ahem* #OffScreen
 OptionsGuy: I'm just here to test the Options system
 ->  Looks like it's working.
     OptionsGuy: Well, that's good to know
