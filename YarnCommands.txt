@@ -2,7 +2,8 @@
 Yarn Commands created for this project
 ======================================
 
-See "InventoryItems_DT" for Inventory item details. "ItemName" is the RowName for entries, NOT DISPLAY NAME.
+See "InventoryItems_DT" for Inventory item details. Items are identified by RowName, NOT DisplayName (e.g. "ItemName" should match RowName)
+"YarnSequences_DT" contains Soft References to Level Sequences to play. RowName is used to identify the sequence in Yarn Script.
 
 Characters inheriting from the base ThirdPersonCharacter_BP have a "YarnCharacterName" String Variable, used to identify them in these functions/commands.
 
@@ -28,6 +29,7 @@ AddItem("YarnCharacterName","ItemName","StackCount") - Adds specified item/stack
 RemoveItem("YarnCharacterName","ItemName","StackCount") - Removes specified item/stack from specified character's inventory
 EquipItem("YarnCharacterName","ItemName") - Equips the specified item on the specified character (item must be in their inventory first!)
 
-Action Commands
+Animation Commands
 ==============
 Action("YarnCharacterName","ActionName") - Causes the specified character to run the Montage specified on the "ActionName" row of the Data Table YarnCharacterActions_DT.
+PlaySequence("SequenceName") - Plays a sequence, as defined in the YarnSequences Data Table.

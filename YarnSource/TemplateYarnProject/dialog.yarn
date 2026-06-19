@@ -3,6 +3,12 @@ title: Setup
 // Declaring variables to be used later
 <<declare $visitedJeff = false>>
 <<declare $foundWrench= false>>
+
+// Until we have support for delayed actions, and/or recognition of function names here in VS Code,
+// we have to set the $delay variable using the ActionWithDelay function
+// and then use that in a <<wait>> command.
+// Ugly workaround but it'll hold until support catches up!
+<<declare $delay = 0>>
 ===
 title: OptionsGuy
 ---
