@@ -114,7 +114,9 @@ title: Mover
 Mover: Excuse me, I have to be somewhere else!
 <<if $moverGuyMoved==false>>
     <<MoveCharacterToMarker "Mover" "TestDestination">>
+    <<set $moverGuyMoved = true>>
 <<else>>
     <<MoveCharacterToMarker "Mover" "TestSource">>
+    <<set $moverGuyMoved = false>>
 <<endif>>
 ===
