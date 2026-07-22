@@ -3,6 +3,7 @@ title: Setup
 // Declaring variables to be used later
 <<declare $visitedJeff = false>>
 <<declare $foundWrench= false>>
+<<declare $moverGuyMoved = false>>
 
 // Until we have support for delayed actions, and/or recognition of function names here in VS Code,
 // we have to set the $delay variable using the ActionWithDelay function
@@ -106,5 +107,14 @@ title: Jeff
     <<AddQuest "JeffsWrenchFind" false>>
 <<elseif $visitedJeff == true>>
     Jeff: You found my wrench yet?
+<<endif>>
+===
+title: Mover
+---
+Mover: Excuse me, I have to be somewhere else!
+<<if $moverGuyMoved==false>>
+    <<MoveCharacterToMarker "Mover" "TestDestination">>
+<<else>>
+    <<MoveCharacterToMarker "Mover" "TestSource">>
 <<endif>>
 ===
