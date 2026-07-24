@@ -26,6 +26,10 @@
 		{
 			"Name": "SerializationUtils",
 			"Enabled": true
+		},
+		{
+			"Name": "AnimationWarping",
+			"Enabled": true
 		}
 	]
 }
