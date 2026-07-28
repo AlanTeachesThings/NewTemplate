@@ -120,3 +120,11 @@ Mover: Excuse me, I have to be somewhere else!
     <<set $moverGuyMoved = false>>
 <<endif>>
 ===
+title: Shopkeeper
+---
+Shopkeeper: Hey. Wanna buy something?
+-> Sure, let's see what you got
+    <<OpenInventory "Shopkeeper">>
+-> Nah, not right now
+    Shopkeeper: Suit yourself, man!
+===
