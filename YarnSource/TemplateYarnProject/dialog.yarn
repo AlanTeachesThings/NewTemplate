@@ -92,12 +92,9 @@ title: Jeff
         Jeff: Hey, you found my wrench!
     <<endif>>
     Jeff: Gimme gimme.
-    //<<if hasQuestStarted("JeffsWrenchFindWrench")>>
-    //    <<ReplaceQuest "JeffsWrenchFindWrench" "JeffsWrenchFind" true>>
-    //<<else>>
-    //    <<UpdateQuest "JeffsWrenchFind" true>>
-    //<<endif>>
-    <<UpdateQuest "JeffsWrenchDeliver" true>>
+    <<if hasQuestStarted("JeffsWrenchFindWrench")>>
+        <<ReplaceQuest "JeffsWrenchFindWrench" "JeffsWrenchFind" true>>
+    <<endif>>
     <<TradeItem "Player" "Jeff" "Wrench" 1>>
     <<EquipItem "Jeff" "Wrench">>
 <<elseif $visitedJeff== false>>
