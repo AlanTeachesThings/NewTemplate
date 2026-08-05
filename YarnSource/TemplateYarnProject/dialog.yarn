@@ -94,10 +94,7 @@ title: Jeff
     Jeff: Gimme gimme.
     <<if hasQuestStarted("JeffsWrenchFindWrench")>>
         <<ReplaceQuest "JeffsWrenchFindWrench" "JeffsWrenchFind" true>>
-    <<else>>
-        <<UpdateQuest "JeffsWrenchFind" true>>
     <<endif>>
-    <<UpdateQuest "JeffsWrenchDeliver" true>>
     <<TradeItem "Player" "Jeff" "Wrench" 1>>
     <<EquipItem "Jeff" "Wrench">>
 <<elseif $visitedJeff== false>>
