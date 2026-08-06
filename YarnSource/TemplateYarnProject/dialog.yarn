@@ -108,13 +108,23 @@ title: Jeff
 ===
 title: Mover
 ---
-Mover: Excuse me, I have to be somewhere else!
-<<if $moverGuyMoved==false>>
+<<if hasQuestStarted("GetSword")>>
+    <<if isQuestComplete("GetSword")>>
+    Mover: Hell yeah buddy, go kick some purple butt!
     <<MoveCharacterToMarker "Mover" "TestDestination">>
-    <<set $moverGuyMoved = true>>
+    <<else>>
+    Mover: Need a sword before you can fight, dude.
+    <<endif>>
 <<else>>
-    <<MoveCharacterToMarker "Mover" "TestSource">>
-    <<set $moverGuyMoved = false>>
+    <<AddQuest "GetSword" false>>
+    <<if isQuestComplete("GetSword")>>
+        Mover: You already got a sword?
+        Mover: Alright then, go kick some purple butt!
+        <<MoveCharacterToMarker "Mover" "TestDestination">>
+        <<else>>
+        Mover: Yeah, I can't let you fight that thing without a sword.
+        Mover: No matter how funny it would be.
+    <<endif>>
 <<endif>>
 ===
 title: Shopkeeper
