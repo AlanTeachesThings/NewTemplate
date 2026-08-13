@@ -106,24 +106,24 @@ title: Jeff
     Jeff: You found my wrench yet?
 <<endif>>
 ===
-title: Mover
+title: Steve
 ---
 <<if hasQuestStarted("GetSword")>>
     <<if isQuestComplete("GetSword")>>
-    Mover: Hell yeah buddy, go kick some purple butt!
-    <<MoveCharacterToMarker "Mover" "TestDestination">>
+    Steve: Hell yeah buddy, go kick some purple butt!
+    <<MoveCharacterToMarker "Steve" "StevesDestination">>
     <<else>>
-    Mover: Need a sword before you can fight, dude.
+    Steve: Need a sword before you can fight, dude.
     <<endif>>
 <<else>>
     <<AddQuest "GetSword" false>>
     <<if isQuestComplete("GetSword")>>
-        Mover: You already got a sword?
-        Mover: Alright then, go kick some purple butt!
+        Steve: You already got a sword?
+        Steve: Alright then, go kick some purple butt!
         <<MoveCharacterToMarker "Mover" "TestDestination">>
         <<else>>
-        Mover: Yeah, I can't let you fight that thing without a sword.
-        Mover: No matter how funny it would be.
+        Steve: Yeah, I can't let you fight that thing without a sword.
+        Steve: No matter how funny it would be.
     <<endif>>
 <<endif>>
 ===
@@ -134,4 +134,17 @@ Shopkeeper: Hey. Wanna buy something?
     <<OpenInventory "Shopkeeper">>
 -> Nah, not right now
     Shopkeeper: Suit yourself, man!
+===
+title: Guy
+---
+<<if isQuestStarted("KillPurpleGuy")>>
+    Guy: You kill that purple guy yet?
+<<else>>
+    Guy: Hey, listen ... we need some help.
+    Guy: The kingdom is under threat from a ... purple guy.
+    Guy: We need you to kill him.
+    Guy: I'd do it myself, but ... I don't wanna.
+    Guy: Good luck out there though!
+    <<MoveCharacterToMarker "Guy" "GuysMarker">>
+<<endif>>
 ===
