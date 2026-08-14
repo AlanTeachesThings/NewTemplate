@@ -1,0 +1,43 @@
+# Unreal Engine
+
+# Build artifacts
+!Binaries/
+Intermediate/
+DerivedDataCache/
+
+# Whitelist DLLS?
+!*.dll
+
+# Saved data
+Saved/
+
+# Local plugin settings
+*.opensdf
+*.sdf
+*.suo
+*.sln
+*.xcworkspace
+*.xcodeproj
+
+# Visual Studio
+.vs/
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+
+# macOS
+.DS_Store
+._*
+__MACOSX/
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+
