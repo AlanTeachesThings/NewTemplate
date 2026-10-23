@@ -22,9 +22,17 @@
 // our own header - must be included first for unreal header tool
 #include "YarnVoiceOverPresenter.h"
 
+#include "Components/AudioComponent.h"
+#include "Sound/SoundBase.h"
+
 // we need the dialogue runner to access the line provider and cancellation tokens.
 // presenters communicate with the runner to signal when they're done.
 #include "YarnDialogueRunner.h"
+
+#include "YarnLocalization.h"
+
+#include "Engine/AssetManager.h"
+#include "Engine/StreamableManager.h"
 
 // logging macros (UE_LOG with LogYarnSpinner category)
 #include "YarnSpinnerModule.h"
@@ -144,9 +152,6 @@ void UYarnVoiceOverPresenter::TickComponent(float DeltaTime, ELevelTick TickType
 			CompleteLine();
 		}
 	}
-	// check if audio playback finished naturally (not interrupted). unreal's
-	// audio component doesn't give us a reliable callback for this, so we
-	// poll it each tick while we're playing.
 	else if (bIsPlaying && AudioComponent && !AudioComponent->IsPlaying())
 	{
 		OnAudioFinished();
@@ -198,11 +203,12 @@ void UYarnVoiceOverPresenter::RunLine_Implementation(const FYarnLocalizedLine& L
 
 	// if there's already audio playing from a previous line, stop it. this
 	// shouldn't normally happen if the dialogue flow is working correctly,
-	// but it's a safety measure.
 	if (AudioComponent && AudioComponent->IsPlaying())
 	{
 		AudioComponent->Stop();
 	}
+	bIsFadingOut = false;
+	PendingClip = nullptr;
 
 	// get the audio clip for this line. this calls the virtual function which
 	// can be overridden in blueprints or c++ subclasses to provide custom
@@ -224,16 +230,15 @@ void UYarnVoiceOverPresenter::RunLine_Implementation(const FYarnLocalizedLine& L
 	}
 
 	// start playback, optionally with a delay. the delay is useful for
-	// synchronising with text presenters or other effects.
 	if (WaitTimeBeforeStart > 0.0f)
 	{
 		if (UWorld* World = GetWorld())
 		{
-			// set up a timer to start playback after the delay. we use
-			// CreateUObject to bind the audio clip parameter.
+			PendingClip = VoiceOverClip;
 			World->GetTimerManager().SetTimer(
 				PreStartTimerHandle,
-				FTimerDelegate::CreateUObject(this, &UYarnVoiceOverPresenter::StartPlayback, VoiceOverClip),
+				this,
+				&UYarnVoiceOverPresenter::StartPendingPlayback,
 				WaitTimeBeforeStart,
 				false  // don't loop
 			);
@@ -252,30 +257,59 @@ void UYarnVoiceOverPresenter::RunLine_Implementation(const FYarnLocalizedLine& L
 
 USoundBase* UYarnVoiceOverPresenter::GetVoiceOverClip_Implementation(const FYarnLocalizedLine& Line)
 {
-	// this is the default implementation which looks for an "audio:" metadata
-	// tag on the line. override this in your subclass or blueprint to provide
-	// your own audio lookup logic - for example, looking up clips in a data
-	// table based on line id, or constructing asset paths from a naming
-	// convention.
-
-	// check if the line has a metadata tag specifying the audio asset path.
-	// metadata tags come from yarn script comments like: #audio:/Game/Audio/Line01
-	for (const FString& Tag : Line.Metadata)
+	// the asset provider finds clips either via a line's metadata
+	// tag, teh localisation's assets folder, or whatever a game supplies in
+	// its place... override this in your subclass or blueprint or whatever 
+	// to do something else for voice over!
+	if (UObject* ProviderObject = GetAssetProviderObject())
 	{
-		if (Tag.StartsWith(TEXT("audio:")))
-		{
-			// extract the path after "audio:" prefix
-			FString AssetPath = Tag.Mid(6);  // 6 = length of "audio:"
-
-			// use StaticLoadObject to synchronously load the asset. this is
-			// fine for audio clips which are typically small. if you have
-			// performance concerns, consider async loading in your override.
-			return Cast<USoundBase>(StaticLoadObject(USoundBase::StaticClass(), nullptr, *AssetPath));
-		}
+		return Cast<USoundBase>(
+			IYarnAssetProvider::Execute_GetAssetForLine(ProviderObject, Line, USoundBase::StaticClass()));
 	}
 
-	// no audio tag found - return nullptr to indicate no audio for this line
 	return nullptr;
+}
+
+UObject* UYarnVoiceOverPresenter::GetAssetProviderObject() const
+{
+	UYarnDialogueRunner* Runner = GetDialogueRunner();
+	if (!Runner)
+	{
+		return nullptr;
+	}
+
+	return Runner->AssetProvider.GetObject();
+}
+
+FString UYarnVoiceOverPresenter::MakeLocalizedClipAssetPath(const FString& LineID) const
+{
+	if (UYarnProjectAssetProvider* Provider = Cast<UYarnProjectAssetProvider>(GetAssetProviderObject()))
+	{
+		return Provider->MakeLocalisedAssetPath(LineID);
+	}
+
+	return FString();
+}
+
+USoundBase* UYarnVoiceOverPresenter::ResolveClipFromLocalizedAssetsPath(const FString& LineID)
+{
+	const FString AssetPath = MakeLocalizedClipAssetPath(LineID);
+	if (AssetPath.IsEmpty())
+	{
+		return nullptr;
+	}
+
+	return Cast<USoundBase>(StaticLoadObject(USoundBase::StaticClass(), nullptr, *AssetPath, nullptr, LOAD_NoWarn | LOAD_Quiet));
+}
+
+void UYarnVoiceOverPresenter::OnPrepareForLines_Implementation(const TArray<FString>& LineIDs)
+{
+	// preload the audio for the upcoming lines so playback starts without a
+	// synchronous load hitch when each line runs.
+	if (UObject* ProviderObject = GetAssetProviderObject())
+	{
+		IYarnAssetProvider::Execute_PrepareAssetsForLines(ProviderObject, LineIDs, USoundBase::StaticClass());
+	}
 }
 
 // ----------------------------------------------------------------------------
@@ -284,20 +318,9 @@ USoundBase* UYarnVoiceOverPresenter::GetVoiceOverClip_Implementation(const FYarn
 
 void UYarnVoiceOverPresenter::EnsureAudioComponent()
 {
-	// if we already have an audio component, nothing to do
 	if (!AudioComponent)
 	{
-		// first, check if our owning actor already has an audio component we
-		// can use. this allows designers to set up the audio component in the
-		// editor with specific settings (attenuation, etc).
-		if (AActor* Owner = GetOwner())
-		{
-			AudioComponent = Owner->FindComponentByClass<UAudioComponent>();
-		}
-
-		// if we still don't have one, create our own. this is marked as
-		// transient so it doesn't get saved with the actor.
-		if (!AudioComponent && GetOwner())
+		if (GetOwner())
 		{
 			AudioComponent = NewObject<UAudioComponent>(GetOwner(), NAME_None, RF_Transient);
 
@@ -319,6 +342,29 @@ void UYarnVoiceOverPresenter::EnsureAudioComponent()
 // ----------------------------------------------------------------------------
 // playback control
 // ----------------------------------------------------------------------------
+
+void UYarnVoiceOverPresenter::StartPendingPlayback()
+{
+	USoundBase* Clip = PendingClip;
+	PendingClip = nullptr;
+	StartPlayback(Clip);
+}
+
+void UYarnVoiceOverPresenter::OnNextLineRequested_Implementation()
+{
+	if (bIsPlaying && !bIsFadingOut && FadeOutTimeOnInterrupt > 0.0f)
+	{
+		BeginFadeOut();
+		return;
+	}
+
+	if (bIsFadingOut)
+	{
+		return;
+	}
+
+	Super::OnNextLineRequested_Implementation();
+}
 
 void UYarnVoiceOverPresenter::StartPlayback(USoundBase* AudioClip)
 {

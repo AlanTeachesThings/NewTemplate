@@ -18,11 +18,16 @@
 #include "YarnLinePresenter.h"
 #include "YarnDialogueRunner.h"
 #include "YarnSpinnerModule.h"
+#include "Components/TextBlock.h"
+#include "Components/PanelWidget.h"
 
 UYarnLinePresenter::UYarnLinePresenter()
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.bStartWithTickEnabled = false;
+
+	UYarnPauseEventProcessor* DefaultPauseProcessor = CreateDefaultSubobject<UYarnPauseEventProcessor>(TEXT("DefaultPauseProcessor"));
+	ActionMarkupHandlers.Add(DefaultPauseProcessor);
 }
 
 void UYarnLinePresenter::BeginPlay()
@@ -48,6 +53,7 @@ void UYarnLinePresenter::TickComponent(float DeltaTime, ELevelTick TickType, FAc
 		{
 			bWaitingForAutoAdvance = false;
 			SetComponentTickEnabled(false);
+			NotifyLineWillDismiss();
 			OnLinePresentationComplete();
 		}
 	}
@@ -115,6 +121,26 @@ void UYarnLinePresenter::RunLine_Implementation(const FYarnLocalizedLine& Line, 
 	bIsTypewriting = false;
 	bTypewriterHurried = false;
 	bWaitingForAutoAdvance = false;
+	PendingPauseTime = 0.0f;
+
+	// markup attribute positions are relative to the full parsed text, which
+	// includes the character name prefix. when we display only the body text,
+	// offset displayed-text indices by the prefix length so action markup
+	// handlers see positions in markup space.
+	MarkupIndexOffset = Line.TextMarkup.Text.Len() - FullText.Len();
+	if (MarkupIndexOffset < 0)
+	{
+		MarkupIndexOffset = 0;
+	}
+
+	// let action markup handlers prepare for the line ([pause/] positions etc)
+	for (UYarnActionMarkupHandler* Handler : ActionMarkupHandlers)
+	{
+		if (Handler)
+		{
+			Handler->OnPrepareForLine(this, Line.TextMarkup);
+		}
+	}
 
 	// show the container
 	SetLineContainerVisible(true);
@@ -123,6 +149,13 @@ void UYarnLinePresenter::RunLine_Implementation(const FYarnLocalizedLine& Line, 
 	switch (TypewriterMode)
 	{
 	case EYarnTypewriterMode::Instant:
+		for (UYarnActionMarkupHandler* Handler : ActionMarkupHandlers)
+		{
+			if (Handler)
+			{
+				Handler->OnLineDisplayBegin(this, Line.TextMarkup);
+			}
+		}
 		ShowFullText();
 		break;
 
@@ -131,6 +164,13 @@ void UYarnLinePresenter::RunLine_Implementation(const FYarnLocalizedLine& Line, 
 		if (LineTextWidget)
 		{
 			LineTextWidget->SetText(FText::GetEmpty());
+		}
+		for (UYarnActionMarkupHandler* Handler : ActionMarkupHandlers)
+		{
+			if (Handler)
+			{
+				Handler->OnLineDisplayBegin(this, Line.TextMarkup);
+			}
 		}
 		bIsTypewriting = true;
 		SetComponentTickEnabled(true);
@@ -163,21 +203,49 @@ void UYarnLinePresenter::OnNextLineRequested_Implementation()
 	{
 		bWaitingForAutoAdvance = false;
 		SetComponentTickEnabled(false);
+		NotifyLineWillDismiss();
 		OnLinePresentationComplete();
 	}
 	else if (!bIsTypewriting && bIsPresentingLine)
 	{
+		NotifyLineWillDismiss();
 		OnLinePresentationComplete();
+	}
+}
+
+void UYarnLinePresenter::NotifyLineWillDismiss()
+{
+	for (UYarnActionMarkupHandler* Handler : ActionMarkupHandlers)
+	{
+		if (Handler)
+		{
+			Handler->OnLineWillDismiss(this);
+		}
 	}
 }
 
 void UYarnLinePresenter::ShowFullText()
 {
+	const bool bWasTypewriting = bIsTypewriting;
 	bIsTypewriting = false;
+	PendingPauseTime = 0.0f;
 
 	if (LineTextWidget)
 	{
 		LineTextWidget->SetText(FText::FromString(FullText));
+	}
+
+	// notify action markup handlers that the line has fully displayed
+	// (only if we actually presented this line, not on shutdown paths)
+	if (bWasTypewriting || bIsPresentingLine)
+	{
+		for (UYarnActionMarkupHandler* Handler : ActionMarkupHandlers)
+		{
+			if (Handler)
+			{
+				Handler->OnLineDisplayComplete(this);
+			}
+		}
 	}
 
 	OnTypewriterComplete.Broadcast();
@@ -227,27 +295,74 @@ void UYarnLinePresenter::UpdateTypewriterText()
 	}
 
 	float DeltaTime = GetWorld()->GetDeltaSeconds();
+
+	// honour a pause requested by an action markup handler ([pause/]) before
+	// revealing any more text
+	if (PendingPauseTime > 0.0f)
+	{
+		PendingPauseTime -= DeltaTime;
+		if (PendingPauseTime > 0.0f)
+		{
+			return;
+		}
+		PendingPauseTime = 0.0f;
+	}
+
 	TypewriterTimer += DeltaTime * CharactersPerSecond;
 
-	while (TypewriterTimer >= 1.0f && CurrentCharIndex < FullText.Len())
+	// gives action markup handlers a chance to react to each character as it
+	// appears. returns true if a handler requested a pause, which stops the
+	// reveal until the pause elapses.
+	auto DispatchCharacter = [this](int32 DisplayIndex) -> bool
+	{
+		FYarnLineCancellationToken Token = DialogueRunner ? DialogueRunner->GetCurrentCancellationToken() : FYarnLineCancellationToken();
+		float MaxPauseDuration = 0.0f;
+		for (UYarnActionMarkupHandler* Handler : ActionMarkupHandlers)
+		{
+			if (Handler)
+			{
+				float PauseDuration = Handler->OnCharacterWillAppear(this, MarkupIndexOffset + DisplayIndex, CurrentLine.TextMarkup, Token);
+				MaxPauseDuration = FMath::Max(MaxPauseDuration, PauseDuration);
+			}
+		}
+		if (MaxPauseDuration > 0.0f)
+		{
+			PendingPauseTime = MaxPauseDuration;
+			return true;
+		}
+		return false;
+	};
+
+	bool bPaused = false;
+	while (!bPaused && TypewriterTimer >= 1.0f && CurrentCharIndex < FullText.Len())
 	{
 		TypewriterTimer -= 1.0f;
 
 		if (bByWord)
 		{
-			// advance to end of current word
+			// advance to end of current word, dispatching each character
 			while (CurrentCharIndex < FullText.Len() && !FChar::IsWhitespace(FullText[CurrentCharIndex]))
 			{
+				if (DispatchCharacter(CurrentCharIndex))
+				{
+					bPaused = true;
+					break;
+				}
 				CurrentCharIndex++;
 			}
 			// skip whitespace after word
-			while (CurrentCharIndex < FullText.Len() && FChar::IsWhitespace(FullText[CurrentCharIndex]))
+			while (!bPaused && CurrentCharIndex < FullText.Len() && FChar::IsWhitespace(FullText[CurrentCharIndex]))
 			{
 				CurrentCharIndex++;
 			}
 		}
 		else
 		{
+			if (DispatchCharacter(CurrentCharIndex))
+			{
+				bPaused = true;
+				break;
+			}
 			CurrentCharIndex++;
 		}
 	}
