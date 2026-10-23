@@ -16,9 +16,7 @@
 // ============================================================================
 
 #include "YarnDialoguePresenter.h"
-#include "YarnLocalization.h"
 #include "YarnDialogueRunner.h"
-#include "YarnSpinnerModule.h"
 #include "TimerManager.h"
 #include "Engine/World.h"
 
@@ -202,14 +200,7 @@ void UYarnDialoguePresenter::RequestContinue()
 {
 	if (DialogueRunner)
 	{
-		if (!DialogueRunner->GetCurrentCancellationToken().IsHurryUpRequested())
-		{
-			DialogueRunner->RequestHurryUp();
-		}
-		else
-		{
-			DialogueRunner->RequestNextLine();
-		}
+		DialogueRunner->Continue();
 	}
 }
 
@@ -286,11 +277,23 @@ FYarnLocalizedLine UYarnLineProvider::GetLocalizedLine_Implementation(const FYar
 
 	if (YarnProject)
 	{
-		const FString EffectiveLineID = ResolveShadowLineID(Line.LineID);
-		const FString BaseText = YarnProject->GetBaseText(EffectiveLineID);
+		FString BaseText = YarnProject->GetBaseText(Line.LineID);
 
-		const FString Locale = YarnProject->BaseLanguage.IsEmpty() ? TEXT("en") : YarnProject->BaseLanguage;
-		FinalizeLocalizedLine(LocalizedLine, Line, EffectiveLineID, BaseText, Locale);
+		BaseText = FYarnVirtualMachine::ExpandSubstitutions(BaseText, Line.Substitutions);
+
+		// Parse markup: handles [tags], escape sequences, character names,
+		// select/plural/ordinal, whitespace trimming, etc.
+		FYarnMarkupParseResult ParseResult = UYarnMarkupLibrary::ParseMarkupFull(
+			BaseText,
+			TEXT("en"),
+			true // add implicit character attribute
+		);
+
+		LocalizedLine.TextMarkup = ParseResult;
+
+		LocalizedLine.Text = FText::FromString(ParseResult.Text);
+		LocalizedLine.CharacterName = ParseResult.CharacterName;
+		LocalizedLine.TextWithoutCharacterName = FText::FromString(ParseResult.TextWithoutCharacterName);
 	}
 	else
 	{
@@ -298,137 +301,6 @@ FYarnLocalizedLine UYarnLineProvider::GetLocalizedLine_Implementation(const FYar
 	}
 
 	return LocalizedLine;
-}
-
-FString UYarnLineProvider::GetShadowLineSource(const FString& LineID) const
-{
-	if (!YarnProject)
-	{
-		return FString();
-	}
-
-	// look up metadata for this line
-	const FString* MetadataStr = YarnProject->LineMetadata.Find(LineID);
-	if (!MetadataStr)
-	{
-		return FString();
-	}
-
-	// parse metadata tags - they're stored as space-separated values
-	TArray<FString> Tags;
-	MetadataStr->ParseIntoArray(Tags, TEXT(" "));
-
-	for (const FString& Tag : Tags)
-	{
-		if (Tag.StartsWith(TEXT("shadow:")))
-		{
-			return FString::Printf(TEXT("line:%s"), *Tag.Mid(7));
-		}
-	}
-
-	return FString();
-}
-
-TArray<FString> UYarnLineProvider::GetLineMetadata(const FString& LineID) const
-{
-	TArray<FString> Result;
-
-	if (!YarnProject)
-	{
-		return Result;
-	}
-
-	// look up and parse the metadata string for this line
-	const FString* MetadataStr = YarnProject->LineMetadata.Find(LineID);
-	if (MetadataStr)
-	{
-		MetadataStr->ParseIntoArray(Result, TEXT(" "));
-	}
-
-	return Result;
-}
-
-FString UYarnLineProvider::ResolveShadowLineID(const FString& LineID) const
-{
-	FString LookupLineID = LineID;
-	TSet<FString> VisitedLineIDs;
-	VisitedLineIDs.Add(LineID);
-
-	constexpr int32 MaxShadowDepth = 10;
-	int32 Depth = 0;
-
-	FString SourceLineID = GetShadowLineSource(LookupLineID);
-	while (!SourceLineID.IsEmpty() && Depth < MaxShadowDepth)
-	{
-		if (VisitedLineIDs.Contains(SourceLineID))
-		{
-			UE_LOG(LogYarnSpinner, Warning, TEXT("Shadow line cycle detected: %s -> %s. Breaking cycle."),
-				*LookupLineID, *SourceLineID);
-			break;
-		}
-
-		VisitedLineIDs.Add(SourceLineID);
-		LookupLineID = SourceLineID;
-		SourceLineID = GetShadowLineSource(LookupLineID);
-		Depth++;
-	}
-
-	if (Depth >= MaxShadowDepth)
-	{
-		UE_LOG(LogYarnSpinner, Warning, TEXT("Shadow line chain too deep (>%d) for line %s"),
-			MaxShadowDepth, *LineID);
-	}
-
-	return LookupLineID;
-}
-
-void UYarnLineProvider::FinalizeLocalizedLine(FYarnLocalizedLine& LocalizedLine, const FYarnLine& Line, const FString& EffectiveLineID, const FString& ResolvedText, const FString& LocaleCode) const
-{
-	const FString Expanded = UYarnLocalizationLibrary::ApplySubstitutions(ResolvedText, Line.Substitutions);
-
-	FYarnMarkupParseResult ParseResult = UYarnMarkupLibrary::ParseMarkupFull(
-		Expanded,
-		LocaleCode,
-		true, // add implicit character attribute
-		MarkerProcessors
-	);
-
-	LocalizedLine.TextMarkup = ParseResult;
-	LocalizedLine.Text = FText::FromString(ParseResult.Text);
-	LocalizedLine.CharacterName = ParseResult.CharacterName;
-	LocalizedLine.TextWithoutCharacterName = FText::FromString(ParseResult.TextWithoutCharacterName);
-
-	LocalizedLine.Metadata = GetLineMetadata(Line.LineID);
-
-	if (EffectiveLineID != Line.LineID)
-	{
-		LocalizedLine.ShadowSourceLineID = EffectiveLineID;
-	}
-}
-
-void UYarnLineProvider::RegisterMarkerProcessor(const FString& AttributeName, TScriptInterface<IYarnMarkupProcessor> Processor)
-{
-	if (AttributeName.IsEmpty() || !Processor.GetObject())
-	{
-		UE_LOG(LogYarnSpinner, Warning, TEXT("RegisterMarkerProcessor: attribute name and processor must both be set"));
-		return;
-	}
-	if (MarkerProcessors.Contains(AttributeName))
-	{
-		UE_LOG(LogYarnSpinner, Warning, TEXT("RegisterMarkerProcessor: replacing existing processor for [%s]"), *AttributeName);
-	}
-	MarkerProcessors.Add(AttributeName, Processor);
-}
-
-void UYarnLineProvider::DeregisterMarkerProcessor(const FString& AttributeName)
-{
-	MarkerProcessors.Remove(AttributeName);
-}
-
-void UYarnLineProvider::PrepareForLines_Implementation(const TArray<FString>& LineIDs)
-{
-	// Base provider has nothing to preload. Subclasses that load external
-	// content (audio, images) should override this to prefetch.
 }
 
 // Auto-advance implementation

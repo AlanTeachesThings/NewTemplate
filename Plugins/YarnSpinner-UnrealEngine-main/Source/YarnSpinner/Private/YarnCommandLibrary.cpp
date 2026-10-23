@@ -16,7 +16,6 @@
 // ============================================================================
 
 #include "YarnCommandLibrary.h"
-#include "YarnCommandRegistry.h"
 #include "YarnDialogueRunner.h"
 #include "YarnSpinnerModule.h"
 
@@ -36,30 +35,6 @@ void UYarnCommandLibrary::RegisterCommandHandler(UYarnDialogueRunner* DialogueRu
 
 	// wrap the blueprint delegate in a TFunction
 	DialogueRunner->AddCommandHandler(CommandName, [Handler](const TArray<FString>& Parameters)
-	{
-		if (Handler.IsBound())
-		{
-			Handler.Execute(Parameters);
-		}
-	});
-}
-
-void UYarnCommandLibrary::RegisterBlockingCommandHandler(UYarnDialogueRunner* DialogueRunner, const FString& CommandName, FYarnCommandHandlerBP Handler)
-{
-	if (!DialogueRunner)
-	{
-		UE_LOG(LogYarnSpinner, Warning, TEXT("RegisterBlockingCommandHandler: DialogueRunner is null"));
-		return;
-	}
-
-	if (CommandName.IsEmpty())
-	{
-		UE_LOG(LogYarnSpinner, Warning, TEXT("RegisterBlockingCommandHandler: CommandName is empty"));
-		return;
-	}
-
-	// wrap the blueprint delegate in a TFunction
-	DialogueRunner->AddBlockingCommandHandler(CommandName, [Handler](const TArray<FString>& Parameters)
 	{
 		if (Handler.IsBound())
 		{
@@ -113,69 +88,9 @@ void UYarnCommandLibrary::UnregisterFunctionHandler(UYarnDialogueRunner* Dialogu
 	DialogueRunner->RemoveFunction(FunctionName);
 }
 
-#if WITH_EDITORONLY_DATA
-void UYarnCommandLibrary::CollectYarnActionsFromClass(const UClass* Class, TArray<FYarnBakedActionEntry>& OutEntries, bool bIncludeInherited)
-{
-	if (!Class)
-	{
-		return;
-	}
-
-	const EFieldIteratorFlags::SuperClassFlags SuperFlags =
-		bIncludeInherited ? EFieldIteratorFlags::IncludeSuper : EFieldIteratorFlags::ExcludeSuper;
-
-	for (TFieldIterator<UFunction> It(Class, SuperFlags); It; ++It)
-	{
-		UFunction* Function = *It;
-		if (!Function)
-		{
-			continue;
-		}
-
-		if (Function->HasMetaData(TEXT("YarnCommand")))
-		{
-			FYarnBakedActionEntry& Entry = OutEntries.AddDefaulted_GetRef();
-			Entry.YarnName = Function->GetMetaData(TEXT("YarnCommand"));
-			if (Entry.YarnName.IsEmpty())
-			{
-				// use the function name if no command name specified
-				Entry.YarnName = Function->GetName();
-			}
-			Entry.OwningClass = Function->GetOwnerClass();
-			Entry.FunctionName = Function->GetFName();
-			Entry.bIsFunction = false;
-		}
-
-		if (Function->HasMetaData(TEXT("YarnFunction")))
-		{
-			FYarnBakedActionEntry& Entry = OutEntries.AddDefaulted_GetRef();
-			Entry.YarnName = Function->GetMetaData(TEXT("YarnFunction"));
-			if (Entry.YarnName.IsEmpty())
-			{
-				Entry.YarnName = Function->GetName();
-			}
-			Entry.OwningClass = Function->GetOwnerClass();
-			Entry.FunctionName = Function->GetFName();
-			Entry.bIsFunction = true;
-		}
-	}
-}
-#endif
-
-namespace
-{
-	void CollectActionsForClass(const UClass* ObjectClass, TArray<FYarnBakedActionEntry>& OutEntries)
-	{
-#if WITH_EDITORONLY_DATA
-		UYarnCommandLibrary::CollectYarnActionsFromClass(ObjectClass, OutEntries);
-#else
-		GetDefault<UYarnCommandRegistrySettings>()->GetEntriesForClass(ObjectClass, OutEntries);
-#endif
-	}
-}
-
 void UYarnCommandLibrary::RegisterCommandsFromObject(UYarnDialogueRunner* DialogueRunner, UObject* HandlerObject)
 {
+#if WITH_EDITORONLY_DATA
 	if (!DialogueRunner || !HandlerObject)
 	{
 		return;
@@ -187,39 +102,42 @@ void UYarnCommandLibrary::RegisterCommandsFromObject(UYarnDialogueRunner* Dialog
 		return;
 	}
 
-	TArray<FYarnBakedActionEntry> Entries;
-	CollectActionsForClass(ObjectClass, Entries);
-
-	for (const FYarnBakedActionEntry& Entry : Entries)
+	// iterate through all functions in the class
+	for (TFieldIterator<UFunction> It(ObjectClass); It; ++It)
 	{
-		if (!HandlerObject->FindFunction(Entry.FunctionName))
+		UFunction* Function = *It;
+		if (!Function)
 		{
-			UE_LOG(LogYarnSpinner, Warning, TEXT("RegisterCommandsFromObject: '%s' has no function '%s' for yarn name '%s' - skipping"),
-				*ObjectClass->GetName(), *Entry.FunctionName.ToString(), *Entry.YarnName);
 			continue;
 		}
 
-		TWeakObjectPtr<UObject> WeakHandler(HandlerObject);
-		const FName FuncName = Entry.FunctionName;
-
-		if (!Entry.bIsFunction)
+		// check for YarnCommand meta
+		FString CommandName;
+		if (Function->HasMetaData(TEXT("YarnCommand")))
 		{
-			DialogueRunner->AddCommandHandler(Entry.YarnName, [WeakHandler, FuncName](const TArray<FString>& Parameters)
+			CommandName = Function->GetMetaData(TEXT("YarnCommand"));
+			if (CommandName.IsEmpty())
+			{
+				// use the function name if no command name specified
+				CommandName = Function->GetName();
+			}
+
+			// create a handler that invokes this function
+			TWeakObjectPtr<UObject> WeakHandler(HandlerObject);
+			FName FuncName = Function->GetFName();
+
+			DialogueRunner->AddCommandHandler(CommandName, [WeakHandler, FuncName](const TArray<FString>& Parameters)
 			{
 				if (UObject* Handler = WeakHandler.Get())
 				{
 					if (UFunction* Func = Handler->FindFunction(FuncName))
 					{
+						// create the parameter struct
+						// we expect the function to take a const TArray<FString>&
 						struct FParams
 						{
 							TArray<FString> Parameters;
 						};
-
-						if (Func->ParmsSize != sizeof(FParams))
-						{
-							UE_LOG(LogYarnSpinner, Error, TEXT("Yarn command handler '%s' has the wrong signature - expected (const TArray<FString>&)"), *FuncName.ToString());
-							return;
-						}
 
 						FParams Params;
 						Params.Parameters = Parameters;
@@ -229,27 +147,46 @@ void UYarnCommandLibrary::RegisterCommandsFromObject(UYarnDialogueRunner* Dialog
 			});
 
 			UE_LOG(LogYarnSpinner, Log, TEXT("Registered command '%s' from %s::%s"),
-				*Entry.YarnName, *ObjectClass->GetName(), *Entry.FunctionName.ToString());
+				*CommandName, *ObjectClass->GetName(), *Function->GetName());
 		}
-		else
+
+		// check for YarnFunction meta
+		FString FunctionName;
+		if (Function->HasMetaData(TEXT("YarnFunction")))
 		{
-			DialogueRunner->AddFunction(Entry.YarnName, [WeakHandler, FuncName](const TArray<FYarnValue>& Parameters) -> FYarnValue
+			FunctionName = Function->GetMetaData(TEXT("YarnFunction"));
+			if (FunctionName.IsEmpty())
+			{
+				// use the function name if no yarn function name specified
+				FunctionName = Function->GetName();
+			}
+
+			// count parameters (excluding return value)
+			int32 ParamCount = 0;
+			for (TFieldIterator<FProperty> ParamIt(Function); ParamIt; ++ParamIt)
+			{
+				if (!(ParamIt->PropertyFlags & CPF_ReturnParm))
+				{
+					ParamCount++;
+				}
+			}
+
+			// create a handler that invokes this function
+			TWeakObjectPtr<UObject> WeakHandler(HandlerObject);
+			FName FuncName = Function->GetFName();
+
+			DialogueRunner->AddFunction(FunctionName, [WeakHandler, FuncName](const TArray<FYarnValue>& Parameters) -> FYarnValue
 			{
 				if (UObject* Handler = WeakHandler.Get())
 				{
 					if (UFunction* Func = Handler->FindFunction(FuncName))
 					{
+						// create the parameter struct
 						struct FParams
 						{
 							TArray<FYarnValue> Parameters;
 							FYarnValue ReturnValue;
 						};
-
-						if (Func->ParmsSize != sizeof(FParams))
-						{
-							UE_LOG(LogYarnSpinner, Error, TEXT("Yarn function handler '%s' has the wrong signature - expected (const TArray<FYarnValue>&) returning FYarnValue"), *FuncName.ToString());
-							return FYarnValue();
-						}
 
 						FParams Params;
 						Params.Parameters = Parameters;
@@ -258,33 +195,60 @@ void UYarnCommandLibrary::RegisterCommandsFromObject(UYarnDialogueRunner* Dialog
 					}
 				}
 				return FYarnValue();
-			}, -1);
+			}, ParamCount);
 
 			UE_LOG(LogYarnSpinner, Log, TEXT("Registered function '%s' from %s::%s"),
-				*Entry.YarnName, *ObjectClass->GetName(), *Entry.FunctionName.ToString());
+				*FunctionName, *ObjectClass->GetName(), *Function->GetName());
 		}
 	}
+#else
+	// Metadata-based registration is only available in editor builds
+	UE_LOG(LogYarnSpinner, Warning, TEXT("RegisterCommandsFromObject: Metadata-based command registration is only available in editor builds. Use RegisterCommandHandler/RegisterFunctionHandler directly."));
+#endif
 }
 
 void UYarnCommandLibrary::UnregisterCommandsFromObject(UYarnDialogueRunner* DialogueRunner, UObject* HandlerObject)
 {
+#if WITH_EDITORONLY_DATA
 	if (!DialogueRunner || !HandlerObject)
 	{
 		return;
 	}
 
-	TArray<FYarnBakedActionEntry> Entries;
-	CollectActionsForClass(HandlerObject->GetClass(), Entries);
-
-	for (const FYarnBakedActionEntry& Entry : Entries)
+	UClass* ObjectClass = HandlerObject->GetClass();
+	if (!ObjectClass)
 	{
-		if (Entry.bIsFunction)
+		return;
+	}
+
+	// iterate through all functions and unregister
+	for (TFieldIterator<UFunction> It(ObjectClass); It; ++It)
+	{
+		UFunction* Function = *It;
+		if (!Function)
 		{
-			DialogueRunner->RemoveFunction(Entry.YarnName);
+			continue;
 		}
-		else
+
+		if (Function->HasMetaData(TEXT("YarnCommand")))
 		{
-			DialogueRunner->RemoveCommandHandler(Entry.YarnName);
+			FString CommandName = Function->GetMetaData(TEXT("YarnCommand"));
+			if (CommandName.IsEmpty())
+			{
+				CommandName = Function->GetName();
+			}
+			DialogueRunner->RemoveCommandHandler(CommandName);
+		}
+
+		if (Function->HasMetaData(TEXT("YarnFunction")))
+		{
+			FString FunctionName = Function->GetMetaData(TEXT("YarnFunction"));
+			if (FunctionName.IsEmpty())
+			{
+				FunctionName = Function->GetName();
+			}
+			DialogueRunner->RemoveFunction(FunctionName);
 		}
 	}
+#endif
 }

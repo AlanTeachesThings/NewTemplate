@@ -19,13 +19,16 @@
 
 #include "CoreMinimal.h"
 #include "Modules/ModuleManager.h"
+#include "IAssetTools.h"
+#include "IAssetTypeActions.h"
 #include "IDirectoryWatcher.h"
 
 class FSlateStyleSet;
 class UYarnProject;
 
- /**
+/**
  * Yarn Spinner editor module.
+ *
  * Provides editor functionality for importing and managing Yarn projects,
  * including asset factories, custom editors, and compilation support.
  */
@@ -36,25 +39,27 @@ public:
 	virtual void StartupModule() override;
 	virtual void ShutdownModule() override;
 
-	 /**
+	/**
 	 * Gets the singleton instance of the editor module.
 	 * @return The Yarn Spinner editor module instance.
 	 */
 	static FYarnSpinnerEditorModule& Get();
 
-	 /**
+	/**
 	 * Checks if the module is loaded and ready.
 	 * @return True if the module is loaded.
 	 */
 	static bool IsAvailable();
 
 private:
+	/** Registers custom asset types with the engine */
+	void RegisterAssetTypes();
+
+	/** Unregisters custom asset types */
+	void UnregisterAssetTypes();
+
 	/** Registers the Slate style set for icons */
 	void RegisterStyleSet();
-
-	void RegisterDetailsCustomizations();
-
-	void UnregisterDetailsCustomizations();
 
 	/** Unregisters the Slate style set */
 	void UnregisterStyleSet();
@@ -65,14 +70,6 @@ private:
 	/** Tears down all active directory watchers */
 	void TeardownSourceFileWatchers();
 
-	void SetupYSLSRegenerationHooks();
-
-	void TeardownYSLSRegenerationHooks();
-
-	void ScheduleYSLSRegeneration();
-
-	void ExecuteYSLSRegeneration();
-
 	/** Called when a watched directory changes */
 	void OnSourceDirectoryChanged(const TArray<FFileChangeData>& Changes);
 
@@ -82,12 +79,11 @@ private:
 	/** Executes pending reimports after the debounce timer fires */
 	void ExecutePendingReimports();
 
+	/** Registered asset type actions */
+	TArray<TSharedPtr<IAssetTypeActions>> RegisteredAssetTypeActions;
+
 	/** Style set for custom icons */
 	TSharedPtr<FSlateStyleSet> StyleSet;
-
-	TArray<FName> CustomizedClassNames;
-	TArray<FName> CustomizedPropertyTypeNames;
-	TSharedPtr<class IPropertyTypeIdentifier> PresenterPickerIdentifier;
 
 	/** Map of watched directory path -> watcher delegate handle */
 	TMap<FString, FDelegateHandle> WatchedDirectories;
@@ -107,14 +103,7 @@ private:
 	/** Timer handle for debouncing watcher rebuilds after asset changes */
 	FTimerHandle RebuildTimerHandle;
 
-	FTimerHandle YSLSTimerHandle;
-
 	/** Asset registry callback handles */
 	FDelegateHandle AssetAddedHandle;
 	FDelegateHandle AssetRemovedHandle;
-	FDelegateHandle FilesLoadedHandle;
-
-	FDelegateHandle PostEngineInitHandle;
-	FDelegateHandle BlueprintCompiledHandle;
-	FDelegateHandle ReloadCompleteHandle;
 };

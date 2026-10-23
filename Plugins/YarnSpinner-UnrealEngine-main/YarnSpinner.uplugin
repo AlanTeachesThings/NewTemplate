@@ -1,7 +1,7 @@
 {
 	"FileVersion": 3,
-	"Version": 9,
-	"VersionName": "3.2.8-alpha9",
+	"Version": 1,
+	"VersionName": "3.2.0-Alpha",
 	"FriendlyName": "Yarn Spinner",
 	"Description": "Yarn Spinner for Unreal Engine.",
 	"Category": "Dialogue",
@@ -14,16 +14,34 @@
 	"IsBetaVersion": false,
 	"IsExperimentalVersion": true,
 	"Installed": false,
+	"Plugins": [
+		{
+			"Name": "EnhancedInput",
+			"Enabled": true
+		}
+	],
 	"Modules": [
 		{
 			"Name": "YarnSpinner",
 			"Type": "Runtime",
-			"LoadingPhase": "Default"
+			"LoadingPhase": "Default",
+			"PlatformAllowList": [
+				"Win64",
+				"Mac",
+				"Linux",
+				"IOS",
+				"Android"
+			]
 		},
 		{
 			"Name": "YarnSpinnerEditor",
 			"Type": "Editor",
-			"LoadingPhase": "Default"
+			"LoadingPhase": "Default",
+			"PlatformAllowList": [
+				"Win64",
+				"Mac",
+				"Linux"
+			]
 		}
 	]
 }

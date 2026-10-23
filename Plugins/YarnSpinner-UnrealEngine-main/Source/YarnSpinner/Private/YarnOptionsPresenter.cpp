@@ -37,15 +37,12 @@ void UYarnOptionWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
 
-	if (OptionButton && !OptionButton->OnClicked.IsAlreadyBound(this, &UYarnOptionWidget::HandleButtonClicked))
+	if (OptionButton)
 	{
 		OptionButton->OnClicked.AddDynamic(this, &UYarnOptionWidget::HandleButtonClicked);
 	}
 
-	if (!OwningPresenter)
-	{
-		OwningPresenter = FindOwningPresenter();
-	}
+	OwningPresenter = FindOwningPresenter();
 }
 
 void UYarnOptionWidget::SetupOption_Implementation(const FYarnOption& InOption, int32 InIndex)
@@ -239,7 +236,8 @@ void UYarnOptionsPresenter::RunLine_Implementation(const FYarnLocalizedLine& Lin
 		bHasLastLine = true;
 	}
 
-	OnLinePresentationComplete();
+	// Options presenter doesn't handle lines directly - immediately complete.
+	// This allows another presenter (like LinePresenter) to handle the actual display.
 }
 
 void UYarnOptionsPresenter::RunOptions_Implementation(const FYarnOptionSet& Options)
@@ -260,9 +258,8 @@ void UYarnOptionsPresenter::RunOptions_Implementation(const FYarnOptionSet& Opti
 
 	if (!bAnyAvailable)
 	{
-		UE_LOG(LogYarnSpinner, Warning, TEXT("YarnOptionsPresenter: All options are unavailable - continuing without a selection"));
+		UE_LOG(LogYarnSpinner, Warning, TEXT("YarnOptionsPresenter: All options are unavailable"));
 		bIsPresentingOptions = false;
-		OnOptionSelected(YarnNoOptionSelected);
 		return;
 	}
 
@@ -271,17 +268,13 @@ void UYarnOptionsPresenter::RunOptions_Implementation(const FYarnOptionSet& Opti
 
 	if (!OptionWidgetClass)
 	{
-		UE_LOG(LogYarnSpinner, Error, TEXT("YarnOptionsPresenter: No OptionWidgetClass set - continuing without a selection"));
-		bIsPresentingOptions = false;
-		OnOptionSelected(YarnNoOptionSelected);
+		UE_LOG(LogYarnSpinner, Error, TEXT("YarnOptionsPresenter: No OptionWidgetClass set"));
 		return;
 	}
 
 	if (!OptionsContainer)
 	{
-		UE_LOG(LogYarnSpinner, Error, TEXT("YarnOptionsPresenter: No OptionsContainer set - continuing without a selection"));
-		bIsPresentingOptions = false;
-		OnOptionSelected(YarnNoOptionSelected);
+		UE_LOG(LogYarnSpinner, Error, TEXT("YarnOptionsPresenter: No OptionsContainer set"));
 		return;
 	}
 
@@ -394,11 +387,6 @@ void UYarnOptionsPresenter::OnHurryUpRequested_Implementation()
 	}
 }
 
-void UYarnOptionsPresenter::OnOptionsHurryUpRequested_Implementation()
-{
-	OnHurryUpRequested_Implementation();
-}
-
 void UYarnOptionsPresenter::HandleOptionSelected(int32 OptionIndex)
 {
 	if (!bIsPresentingOptions || bHasSubmittedSelection)
@@ -427,7 +415,10 @@ void UYarnOptionsPresenter::HandleOptionSelected(int32 OptionIndex)
 	{
 		StartFadeOut();
 
-		OnOptionSelected(OptionIndex);
+		if (DialogueRunner)
+		{
+			DialogueRunner->SelectOption(OptionIndex);
+		}
 	}
 	else
 	{
@@ -436,7 +427,10 @@ void UYarnOptionsPresenter::HandleOptionSelected(int32 OptionIndex)
 		bOptionsVisible = false;
 		SetComponentTickEnabled(false);
 
-		OnOptionSelected(OptionIndex);
+		if (DialogueRunner)
+		{
+			DialogueRunner->SelectOption(OptionIndex);
+		}
 
 		OnOptionsDismissed.Broadcast();
 	}
@@ -520,7 +514,6 @@ UYarnOptionWidget* UYarnOptionsPresenter::CreateOptionWidget()
 	UYarnOptionWidget* Widget = CreateWidget<UYarnOptionWidget>(PC, OptionWidgetClass);
 	if (Widget)
 	{
-		Widget->SetOwningPresenter(this);
 		OptionsContainer->AddChild(Widget);
 		Widget->SetVisibility(ESlateVisibility::Collapsed);
 	}
@@ -597,7 +590,7 @@ void UYarnOptionsPresenter::UpdateFade(float DeltaTime)
 {
 	float Duration = bFadingIn ? FadeInDuration : FadeOutDuration;
 
-	if (Duration <= 0.0f || (bFadingIn && IsOptionHurryUpRequested()))
+	if (Duration <= 0.0f)
 	{
 		FadeProgress = 1.0f;
 	}
@@ -730,14 +723,6 @@ FString UYarnOptionsPresenter::ProcessLastLineText(const FYarnLocalizedLine& Lin
 {
 	FString LineText;
 
-	int32 SourcePrefixLength = 0;
-	int32 DisplayPrefixLength = 0;
-
-	if (const FYarnMarkupAttribute* CharacterAttribute = Line.TextMarkup.FindAttribute(TEXT("character")))
-	{
-		SourcePrefixLength = CharacterAttribute->Length;
-	}
-
 	// If we have a separate character name widget, use text without character name
 	if (LastLineCharacterNameWidget)
 	{
@@ -749,20 +734,10 @@ FString UYarnOptionsPresenter::ProcessLastLineText(const FYarnLocalizedLine& Lin
 		if (!Line.CharacterName.IsEmpty())
 		{
 			LineText = FString::Printf(TEXT("%s: %s"), *Line.CharacterName, *Line.TextWithoutCharacterName.ToString());
-			DisplayPrefixLength = Line.CharacterName.Len() + 2;
 		}
 		else
 		{
 			LineText = Line.Text.ToString();
-		}
-	}
-
-	if (const FYarnMarkupAttribute* Markup = Line.TextMarkup.FindAttribute(TruncateLastLineMarkupName))
-	{
-		const int32 Position = Markup->Position - SourcePrefixLength + DisplayPrefixLength;
-		if (Position >= 0 && Position <= LineText.Len())
-		{
-			LineText = TEXT("...") + LineText.Mid(Position);
 		}
 	}
 

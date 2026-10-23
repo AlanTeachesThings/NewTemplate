@@ -59,9 +59,7 @@ void UYarnSourceFile::GetAssetRegistryTags(FAssetRegistryTagsContext Context) co
 {
 	if (AssetImportData)
 	{
-		// Use the engine's standard tag name — asset systems (including
-		// auto-reimport) look for SourceFileTagName(), not a custom key.
-		Context.AddTag(FAssetRegistryTag(SourceFileTagName(), AssetImportData->GetSourceData().ToJson(), FAssetRegistryTag::TT_Hidden));
+		Context.AddTag(FAssetRegistryTag(TEXT("SourceFile"), AssetImportData->GetSourceData().ToJson(), FAssetRegistryTag::TT_Hidden));
 	}
 
 	Super::GetAssetRegistryTags(Context);

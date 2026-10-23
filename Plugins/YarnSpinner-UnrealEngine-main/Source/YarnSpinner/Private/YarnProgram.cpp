@@ -213,7 +213,7 @@ FString FYarnNode::GetHeaderValue(const FString& Key) const
 {
 	for (const FYarnHeader& Header : Headers)
 	{
-		if (Header.Key.Equals(Key, ESearchCase::CaseSensitive))
+		if (Header.Key == Key)
 		{
 			return Header.Value;
 		}
@@ -225,7 +225,7 @@ bool FYarnNode::HasHeader(const FString& Key) const
 {
 	for (const FYarnHeader& Header : Headers)
 	{
-		if (Header.Key.Equals(Key, ESearchCase::CaseSensitive))
+		if (Header.Key == Key)
 		{
 			return true;
 		}
@@ -292,17 +292,12 @@ TArray<FString> FYarnNode::GetLineIDs() const
 
 const FYarnNode* FYarnProgram::GetNode(const FString& NodeName) const
 {
-	const FYarnNode* Node = Nodes.Find(NodeName);
-	if (Node && !Node->Name.Equals(NodeName, ESearchCase::CaseSensitive))
-	{
-		return nullptr;
-	}
-	return Node;
+	return Nodes.Find(NodeName);
 }
 
 bool FYarnProgram::HasNode(const FString& NodeName) const
 {
-	return GetNode(NodeName) != nullptr;
+	return Nodes.Contains(NodeName);
 }
 
 bool FYarnProgram::TryGetInitialValue(const FString& VariableName, FYarnValue& OutValue) const
@@ -397,7 +392,7 @@ void UYarnProject::PostInitProperties()
 #endif
 }
 
-#if WITH_EDITOR
+#if WITH_EDITORONLY_DATA
 void UYarnProject::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
 	Super::PostEditChangeProperty(PropertyChangedEvent);

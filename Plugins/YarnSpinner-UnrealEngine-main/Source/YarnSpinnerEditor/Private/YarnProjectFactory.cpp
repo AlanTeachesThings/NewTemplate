@@ -18,22 +18,29 @@
 #include "YarnProjectFactory.h"
 #include "YarnProgram.h"
 #include "YarnSpinnerModule.h"
-#include "YarnYSLSGenerator.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
-#include "Internationalization/Regex.h"
 #include "HAL/PlatformProcess.h"
-#include "Misc/ScopeExit.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "EditorFramework/AssetImportData.h"
-#include "YarnEditorPaths.h"
-#include "YarnSpinnerEditorSettings.h"
 
 #define LOCTEXT_NAMESPACE "YarnProjectFactory"
 
 namespace
 {
+	/**
+	 * Normalize a path to a canonical absolute form for consistent comparison.
+	 * Converts to absolute path, collapses .., normalizes slashes to forward slashes.
+	 */
+	FString NormalizeToAbsolute(const FString& InPath)
+	{
+		FString Result = FPaths::ConvertRelativePathToFull(InPath);
+		FPaths::NormalizeFilename(Result);
+		FPaths::CollapseRelativeDirectories(Result);
+		return Result;
+	}
+
 	// Resolve sourceFiles glob patterns from a .yarnproject into absolute file paths.
 	// Matches the behaviour of Microsoft.Extensions.FileSystemGlobbing used by the
 	// Yarn Spinner compiler:
@@ -48,7 +55,7 @@ namespace
 		TArray<FString> Result;
 
 		// Ensure ProjectDir is absolute and normalized
-		FString AbsProjectDir = YarnEditorPaths::NormalizeToAbsolute(ProjectDir);
+		FString AbsProjectDir = NormalizeToAbsolute(ProjectDir);
 
 		for (const FString& RawPattern : IncludePatterns)
 		{
@@ -60,7 +67,7 @@ namespace
 			// Handle absolute paths as direct file references
 			if (FPaths::IsRelative(Pattern) == false && Pattern.EndsWith(TEXT(".yarn")))
 			{
-				FString AbsPath = YarnEditorPaths::NormalizeToAbsolute(Pattern);
+				FString AbsPath = NormalizeToAbsolute(Pattern);
 				if (IFileManager::Get().FileExists(*AbsPath))
 				{
 					Result.AddUnique(AbsPath);
@@ -119,7 +126,7 @@ namespace
 					SearchDir = FPaths::Combine(AbsProjectDir, CleanDir);
 				}
 			}
-			SearchDir = YarnEditorPaths::NormalizeToAbsolute(SearchDir);
+			SearchDir = NormalizeToAbsolute(SearchDir);
 
 			FString WildcardFilter = TEXT("*") + Extension;
 
@@ -129,7 +136,7 @@ namespace
 				IFileManager::Get().FindFilesRecursive(FoundFiles, *SearchDir, *WildcardFilter, true, false);
 				for (FString& FilePath : FoundFiles)
 				{
-					FilePath = YarnEditorPaths::NormalizeToAbsolute(FilePath);
+					FilePath = NormalizeToAbsolute(FilePath);
 					Result.AddUnique(FilePath);
 				}
 			}
@@ -139,7 +146,7 @@ namespace
 				IFileManager::Get().FindFiles(FoundFiles, *FPaths::Combine(SearchDir, WildcardFilter), true, false);
 				for (const FString& FileName : FoundFiles)
 				{
-					FString FullPath = YarnEditorPaths::NormalizeToAbsolute(FPaths::Combine(SearchDir, FileName));
+					FString FullPath = NormalizeToAbsolute(FPaths::Combine(SearchDir, FileName));
 					Result.AddUnique(FullPath);
 				}
 			}
@@ -173,30 +180,27 @@ bool UYarnProjectFactory::FactoryCanImport(const FString& Filename)
 	return Filename.EndsWith(TEXT(".yarnproject"));
 }
 
-bool UYarnProjectFactory::ImportProjectData(UYarnProject* YarnProject, const FString& SourcePath)
+UObject* UYarnProjectFactory::FactoryCreateFile(UClass* InClass, UObject* InParent, FName InName, EObjectFlags Flags,
+	const FString& Filename, const TCHAR* Parms, FFeedbackContext* Warn, bool& bOutOperationCanceled)
 {
+	bOutOperationCanceled = false;
+
+	// Compile the yarn project
 	FString CompiledPath, LinesPath, MetadataPath, Error;
-	TArray<FYarnProjectDiagnostic> Diagnostics;
-	if (!CompileYarnProject(SourcePath, CompiledPath, LinesPath, MetadataPath, Diagnostics, Error))
+	if (!CompileYarnProject(Filename, CompiledPath, LinesPath, MetadataPath, Error))
 	{
 		UE_LOG(LogYarnSpinner, Error, TEXT("Failed to compile Yarn project: %s"), *Error);
-		return false;
+		return nullptr;
 	}
 
-	const FString CompileTempDir = FPaths::GetPath(CompiledPath);
-	ON_SCOPE_EXIT
-	{
-		IFileManager::Get().DeleteDirectory(*CompileTempDir, /*RequireExists=*/false, /*Tree=*/true);
-	};
-
-	// Retain compiler diagnostics on the asset so warnings stay visible
-	YarnProject->ImportDiagnostics = Diagnostics;
+	// Create the asset
+	UYarnProject* YarnProject = NewObject<UYarnProject>(InParent, InClass, InName, Flags);
 
 	// Parse the compiled program
 	if (!ParseCompiledProgram(CompiledPath, YarnProject->Program, Error))
 	{
 		UE_LOG(LogYarnSpinner, Error, TEXT("Failed to parse compiled Yarn program: %s"), *Error);
-		return false;
+		return nullptr;
 	}
 
 	// Parse the string table
@@ -212,32 +216,18 @@ bool UYarnProjectFactory::ImportProjectData(UYarnProject* YarnProject, const FSt
 	}
 
 	// Parse the .yarnproject JSON for localization settings
-	ParseYarnProjectLocalization(SourcePath, FPaths::GetPath(SourcePath), YarnProject, Error);
+	FString ProjectDir = FPaths::GetPath(Filename);
+	ParseYarnProjectLocalization(Filename, ProjectDir, YarnProject, Error);
 
 #if WITH_EDITORONLY_DATA
 	// Store the source project path for file watching (absolute, normalized)
-	YarnProject->SourceProjectPath = YarnEditorPaths::NormalizeToAbsolute(SourcePath);
+	YarnProject->SourceProjectPath = NormalizeToAbsolute(Filename);
 #endif
 
 	// Populate node names
 	for (const auto& Pair : YarnProject->Program.Nodes)
 	{
 		YarnProject->NodeNames.Add(Pair.Key);
-	}
-
-	return true;
-}
-
-UObject* UYarnProjectFactory::FactoryCreateFile(UClass* InClass, UObject* InParent, FName InName, EObjectFlags Flags,
-	const FString& Filename, const TCHAR* Parms, FFeedbackContext* Warn, bool& bOutOperationCanceled)
-{
-	bOutOperationCanceled = false;
-
-	UYarnProject* YarnProject = NewObject<UYarnProject>(InParent, InClass, InName, Flags);
-
-	if (!ImportProjectData(YarnProject, Filename))
-	{
-		return nullptr;
 	}
 
 	// Set up asset import data for reimport support
@@ -248,7 +238,10 @@ UObject* UYarnProjectFactory::FactoryCreateFile(UClass* InClass, UObject* InPare
 	YarnProject->AssetImportData->Update(Filename);
 	YarnProject->MarkPackageDirty();
 
-	FYarnYSLSGenerator::GenerateForProject(Filename);
+	// Clean up temp files
+	IFileManager::Get().Delete(*CompiledPath);
+	IFileManager::Get().Delete(*LinesPath);
+	IFileManager::Get().Delete(*MetadataPath);
 
 	return YarnProject;
 }
@@ -287,6 +280,15 @@ EReimportResult::Type UYarnProjectFactory::Reimport(UObject* Obj)
 		return EReimportResult::Failed;
 	}
 
+	// Compile the yarn project
+	FString CompiledPath, LinesPath, MetadataPath, Error;
+	if (!CompileYarnProject(SourcePath, CompiledPath, LinesPath, MetadataPath, Error))
+	{
+		UE_LOG(LogYarnSpinner, Error, TEXT("Failed to compile Yarn project during reimport: %s"), *Error);
+		return EReimportResult::Failed;
+	}
+
+	// Clear existing data
 	YarnProject->Program = FYarnProgram();
 	YarnProject->BaseStringTable.Empty();
 	YarnProject->LineMetadata.Empty();
@@ -297,77 +299,54 @@ EReimportResult::Type UYarnProjectFactory::Reimport(UObject* Obj)
 	YarnProject->ResolvedSourceFiles.Empty();
 #endif
 
-	if (!ImportProjectData(YarnProject, SourcePath))
+	// Parse the compiled program
+	if (!ParseCompiledProgram(CompiledPath, YarnProject->Program, Error))
 	{
+		UE_LOG(LogYarnSpinner, Error, TEXT("Failed to parse compiled Yarn program during reimport: %s"), *Error);
 		return EReimportResult::Failed;
+	}
+
+	// Parse the string table
+	if (!ParseLinesCSV(LinesPath, YarnProject->BaseStringTable, Error))
+	{
+		UE_LOG(LogYarnSpinner, Warning, TEXT("Failed to parse lines CSV during reimport: %s"), *Error);
+	}
+
+	// Parse the metadata
+	if (!ParseMetadataCSV(MetadataPath, YarnProject->LineMetadata, Error))
+	{
+		UE_LOG(LogYarnSpinner, Warning, TEXT("Failed to parse metadata CSV during reimport: %s"), *Error);
+	}
+
+	// Parse the .yarnproject JSON for localization settings
+	FString ProjectDir = FPaths::GetPath(SourcePath);
+	ParseYarnProjectLocalization(SourcePath, ProjectDir, YarnProject, Error);
+
+#if WITH_EDITORONLY_DATA
+	// Store the source project path for file watching (absolute, normalized)
+	YarnProject->SourceProjectPath = NormalizeToAbsolute(SourcePath);
+#endif
+
+	// Populate node names
+	for (const auto& Pair : YarnProject->Program.Nodes)
+	{
+		YarnProject->NodeNames.Add(Pair.Key);
 	}
 
 	// Update the import data timestamp
 	YarnProject->AssetImportData->Update(SourcePath);
 	YarnProject->MarkPackageDirty();
 
-	FYarnYSLSGenerator::GenerateForProject(SourcePath);
+	// Clean up temp files
+	IFileManager::Get().Delete(*CompiledPath);
+	IFileManager::Get().Delete(*LinesPath);
+	IFileManager::Get().Delete(*MetadataPath);
 
 	return EReimportResult::Succeeded;
 }
 
-void UYarnProjectFactory::ParseCompilerDiagnostics(const FString& CompilerOutput, TArray<FYarnProjectDiagnostic>& OutDiagnostics)
-{
-	// ysc prints diagnostics as lines of the form:
-	//   <emoji> WARNING: <file>: <line>:<column> <message>
-	//   <emoji> ERROR: <file>: <line>:<column> <message>
-	// The file/location prefix is omitted when the diagnostic has no source
-	// location, so both shapes have to parse.
-
-	TArray<FString> Lines;
-	CompilerOutput.ParseIntoArrayLines(Lines);
-
-	for (const FString& Line : Lines)
-	{
-		FString Severity;
-		int32 MarkerIndex = Line.Find(TEXT("WARNING: "));
-		if (MarkerIndex != INDEX_NONE)
-		{
-			Severity = TEXT("Warning");
-			MarkerIndex += 9; // length of "WARNING: "
-		}
-		else
-		{
-			MarkerIndex = Line.Find(TEXT("ERROR: "));
-			if (MarkerIndex == INDEX_NONE)
-			{
-				continue;
-			}
-			Severity = TEXT("Error");
-			MarkerIndex += 7; // length of "ERROR: "
-		}
-
-		FYarnProjectDiagnostic Diagnostic;
-		Diagnostic.Severity = Severity;
-
-		FString Rest = Line.Mid(MarkerIndex);
-
-		// Try to split off "<file>: <line>:<column> " from the front
-		FRegexPattern LocationPattern(TEXT("^(.+?): ([0-9]+):([0-9]+) (.*)$"));
-		FRegexMatcher LocationMatcher(LocationPattern, Rest);
-		if (LocationMatcher.FindNext())
-		{
-			Diagnostic.FilePath = LocationMatcher.GetCaptureGroup(1);
-			Diagnostic.Line = FCString::Atoi(*LocationMatcher.GetCaptureGroup(2));
-			Diagnostic.Column = FCString::Atoi(*LocationMatcher.GetCaptureGroup(3));
-			Diagnostic.Message = LocationMatcher.GetCaptureGroup(4);
-		}
-		else
-		{
-			Diagnostic.Message = Rest;
-		}
-
-		OutDiagnostics.Add(Diagnostic);
-	}
-}
-
 bool UYarnProjectFactory::CompileYarnProject(const FString& ProjectPath, FString& OutCompiledPath, FString& OutLinesPath,
-	FString& OutMetadataPath, TArray<FYarnProjectDiagnostic>& OutDiagnostics, FString& OutError)
+	FString& OutMetadataPath, FString& OutError)
 {
 	FString YscPath = GetYscPath();
 	if (YscPath.IsEmpty())
@@ -390,68 +369,19 @@ bool UYarnProjectFactory::CompileYarnProject(const FString& ProjectPath, FString
 		*ProjectPath, *TempDir, *OutputName);
 
 	// Run ysc
-	constexpr double YscTimeoutSeconds = 60.0;
-
 	int32 ReturnCode = 0;
 	FString StdOut, StdErr;
+	bool bLaunchSuccess = FPlatformProcess::ExecProcess(*YscPath, *CommandLine, &ReturnCode, &StdOut, &StdErr);
 
-	void* ReadPipe = nullptr;
-	void* WritePipe = nullptr;
-	FPlatformProcess::CreatePipe(ReadPipe, WritePipe);
-
-	FProcHandle ProcHandle = FPlatformProcess::CreateProc(*YscPath, *CommandLine,
-		/*bLaunchDetached=*/false, /*bLaunchHidden=*/true, /*bLaunchReallyHidden=*/true,
-		nullptr, 0, nullptr, WritePipe, nullptr, WritePipe);
-
-	if (!ProcHandle.IsValid())
+	if (!bLaunchSuccess)
 	{
-		FPlatformProcess::ClosePipe(ReadPipe, WritePipe);
 		OutError = FString::Printf(TEXT("Failed to launch ysc: %s"), *YscPath);
 		return false;
 	}
 
-	const double StartTime = FPlatformTime::Seconds();
-	while (FPlatformProcess::IsProcRunning(ProcHandle))
-	{
-		StdOut += FPlatformProcess::ReadPipe(ReadPipe);
-
-		if (FPlatformTime::Seconds() - StartTime > YscTimeoutSeconds)
-		{
-			FPlatformProcess::TerminateProc(ProcHandle, /*KillTree=*/true);
-			FPlatformProcess::CloseProc(ProcHandle);
-			FPlatformProcess::ClosePipe(ReadPipe, WritePipe);
-			OutError = FString::Printf(TEXT("ysc did not finish within %.0f seconds and was terminated"), YscTimeoutSeconds);
-			return false;
-		}
-
-		FPlatformProcess::Sleep(0.05f);
-	}
-
-	StdOut += FPlatformProcess::ReadPipe(ReadPipe);
-	FPlatformProcess::GetProcReturnCode(ProcHandle, &ReturnCode);
-	FPlatformProcess::CloseProc(ProcHandle);
-	FPlatformProcess::ClosePipe(ReadPipe, WritePipe);
-
-	// Collect compiler diagnostics from the output. Warnings don't fail the
-	// compile, but they're retained on the project asset and logged with
-	// source locations so problems stay visible after import.
-	ParseCompilerDiagnostics(StdOut + TEXT("\n") + StdErr, OutDiagnostics);
-	for (const FYarnProjectDiagnostic& Diagnostic : OutDiagnostics)
-	{
-		if (Diagnostic.Severity == TEXT("Error"))
-		{
-			UE_LOG(LogYarnSpinner, Error, TEXT("%s(%d,%d): %s"), *Diagnostic.FilePath, Diagnostic.Line, Diagnostic.Column, *Diagnostic.Message);
-		}
-		else
-		{
-			UE_LOG(LogYarnSpinner, Warning, TEXT("%s(%d,%d): %s"), *Diagnostic.FilePath, Diagnostic.Line, Diagnostic.Column, *Diagnostic.Message);
-		}
-	}
-
 	if (ReturnCode != 0)
 	{
-		const FString Output = !StdErr.IsEmpty() ? StdErr : (OutDiagnostics.Num() == 0 ? StdOut.TrimStartAndEnd() : FString());
-		OutError = FString::Printf(TEXT("ysc returned error code %d: %s"), ReturnCode, *Output);
+		OutError = FString::Printf(TEXT("ysc returned error code %d: %s"), ReturnCode, *StdErr);
 		return false;
 	}
 
@@ -475,34 +405,29 @@ bool UYarnProjectFactory::ParseCompiledProgram(const FString& CompiledPath, FYar
 	}
 
 	FYarnProtobufParser Parser(FileData);
-	if (!Parser.ParseProgram(OutProgram, OutError))
-	{
-		return false;
-	}
-
-	constexpr int32 MaxKnownLanguageVersion = 4;
-	if (OutProgram.LanguageVersion > MaxKnownLanguageVersion)
-	{
-		UE_LOG(LogYarnSpinner, Warning, TEXT("yarn project importer: program language version %d is newer than this plugin supports (%d) - update the plugin if dialogue misbehaves"),
-			OutProgram.LanguageVersion, MaxKnownLanguageVersion);
-	}
-	return true;
+	return Parser.ParseProgram(OutProgram, OutError);
 }
 
 bool UYarnProjectFactory::ParseLinesCSV(const FString& LinesPath, TMap<FString, FString>& OutStringTable, FString& OutError)
 {
-	FString Content;
-	if (!FFileHelper::LoadFileToString(Content, *LinesPath))
+	TArray<FString> Lines;
+	if (!FFileHelper::LoadFileToStringArray(Lines, *LinesPath))
 	{
 		OutError = FString::Printf(TEXT("Failed to load lines file: %s"), *LinesPath);
 		return false;
 	}
 
-	TArray<TArray<FString>> Records;
-	ParseCSVRecords(Content, Records);
-	for (int32 i = 1; i < Records.Num(); i++)
+	// Skip header
+	for (int32 i = 1; i < Lines.Num(); i++)
 	{
-		const TArray<FString>& Fields = Records[i];
+		const FString& Line = Lines[i];
+		if (Line.IsEmpty()) continue;
+
+		// Parse CSV: id,text,file,node,lineNumber
+		// Use proper CSV parsing that handles escaped quotes ("")
+		TArray<FString> Fields;
+		ParseCSVLine(Line, Fields);
+
 		if (Fields.Num() >= 2)
 		{
 			OutStringTable.Add(Fields[0], Fields[1]);
@@ -514,18 +439,24 @@ bool UYarnProjectFactory::ParseLinesCSV(const FString& LinesPath, TMap<FString, 
 
 bool UYarnProjectFactory::ParseMetadataCSV(const FString& MetadataPath, TMap<FString, FString>& OutMetadata, FString& OutError)
 {
-	FString Content;
-	if (!FFileHelper::LoadFileToString(Content, *MetadataPath))
+	TArray<FString> Lines;
+	if (!FFileHelper::LoadFileToStringArray(Lines, *MetadataPath))
 	{
 		OutError = FString::Printf(TEXT("Failed to load metadata file: %s"), *MetadataPath);
 		return false;
 	}
 
-	TArray<TArray<FString>> Records;
-	ParseCSVRecords(Content, Records);
-	for (int32 i = 1; i < Records.Num(); i++)
+	// Skip header
+	for (int32 i = 1; i < Lines.Num(); i++)
 	{
-		const TArray<FString>& Fields = Records[i];
+		const FString& Line = Lines[i];
+		if (Line.IsEmpty()) continue;
+
+		// Parse CSV: id,node,lineNumber,tags
+		// Use proper CSV parsing that handles escaped quotes ("")
+		TArray<FString> Fields;
+		ParseCSVLine(Line, Fields);
+
 		if (Fields.Num() >= 4)
 		{
 			OutMetadata.Add(Fields[0], Fields[3]);
@@ -537,25 +468,10 @@ bool UYarnProjectFactory::ParseMetadataCSV(const FString& MetadataPath, TMap<FSt
 
 FString UYarnProjectFactory::GetYscPath() const
 {
-	const UYarnSpinnerEditorSettings* Settings = GetDefault<UYarnSpinnerEditorSettings>();
-	if (!Settings->YscPath.FilePath.IsEmpty())
-	{
-		if (IFileManager::Get().FileExists(*Settings->YscPath.FilePath))
-		{
-			return Settings->YscPath.FilePath;
-		}
-		UE_LOG(LogYarnSpinner, Warning, TEXT("Configured ysc path '%s' does not exist - falling back to discovery"), *Settings->YscPath.FilePath);
-	}
-
-	static FString CachedPath;
-	if (!CachedPath.IsEmpty() && IFileManager::Get().FileExists(*CachedPath))
-	{
-		return CachedPath;
-	}
-
 	TArray<FString> PossiblePaths;
 
 #if PLATFORM_WINDOWS
+	// Windows paths
 	FString UserProfile = FPlatformMisc::GetEnvironmentVariable(TEXT("USERPROFILE"));
 	if (!UserProfile.IsEmpty())
 	{
@@ -565,6 +481,7 @@ FString UYarnProjectFactory::GetYscPath() const
 	FString LocalAppData = FPlatformMisc::GetEnvironmentVariable(TEXT("LOCALAPPDATA"));
 	if (!LocalAppData.IsEmpty())
 	{
+		PossiblePaths.Add(FPaths::Combine(LocalAppData, TEXT("Microsoft/dotnet/tools/ysc.exe")));
 		PossiblePaths.Add(FPaths::Combine(LocalAppData, TEXT("YarnSpinner/ysc.exe")));
 	}
 	FString AppData = FPlatformMisc::GetEnvironmentVariable(TEXT("APPDATA"));
@@ -572,6 +489,22 @@ FString UYarnProjectFactory::GetYscPath() const
 	{
 		PossiblePaths.Add(FPaths::Combine(AppData, TEXT("YarnSpinner/ysc.exe")));
 	}
+	FString ProgramFiles = FPlatformMisc::GetEnvironmentVariable(TEXT("ProgramFiles"));
+	if (!ProgramFiles.IsEmpty())
+	{
+		PossiblePaths.Add(FPaths::Combine(ProgramFiles, TEXT("dotnet/tools/ysc.exe")));
+		PossiblePaths.Add(FPaths::Combine(ProgramFiles, TEXT("YarnSpinner/ysc.exe")));
+	}
+	FString ProgramFilesX86 = FPlatformMisc::GetEnvironmentVariable(TEXT("ProgramFiles(x86)"));
+	if (!ProgramFilesX86.IsEmpty())
+	{
+		PossiblePaths.Add(FPaths::Combine(ProgramFilesX86, TEXT("dotnet/tools/ysc.exe")));
+		PossiblePaths.Add(FPaths::Combine(ProgramFilesX86, TEXT("YarnSpinner/ysc.exe")));
+	}
+	// Common hardcoded paths
+	PossiblePaths.Add(TEXT("C:/Program Files/dotnet/tools/ysc.exe"));
+	PossiblePaths.Add(TEXT("C:/Program Files/YarnSpinner/ysc.exe"));
+	PossiblePaths.Add(TEXT("ysc.exe")); // Rely on PATH
 #else
 	// macOS and Linux paths
 	FString HomeDir = FPlatformMisc::GetEnvironmentVariable(TEXT("HOME"));
@@ -581,6 +514,7 @@ FString UYarnProjectFactory::GetYscPath() const
 		PossiblePaths.Add(FPaths::Combine(HomeDir, TEXT(".dotnet/tools/ysc")));
 	}
 	PossiblePaths.Add(TEXT("/opt/homebrew/bin/ysc"));
+	PossiblePaths.Add(TEXT("ysc")); // Rely on PATH
 #endif
 
 	for (const FString& Path : PossiblePaths)
@@ -588,17 +522,13 @@ FString UYarnProjectFactory::GetYscPath() const
 		if (IFileManager::Get().FileExists(*Path))
 		{
 			UE_LOG(LogYarnSpinner, Log, TEXT("Found ysc at: %s"), *Path);
-			CachedPath = Path;
 			return Path;
 		}
 	}
 
-	UE_LOG(LogYarnSpinner, Warning, TEXT("Could not find ysc in common locations, trying PATH. Set an explicit path in Project Settings > Plugins > Yarn Spinner."));
-#if PLATFORM_WINDOWS
-	return TEXT("ysc.exe");
-#else
+	// Fall back to assuming ysc is available on PATH
+	UE_LOG(LogYarnSpinner, Warning, TEXT("Could not find ysc in common locations, trying PATH"));
 	return TEXT("ysc");
-#endif
 }
 
 bool UYarnProjectFactory::ParseYarnProjectLocalization(const FString& ProjectPath, const FString& ProjectDir,
@@ -680,7 +610,7 @@ bool UYarnProjectFactory::ParseYarnProjectLocalization(const FString& ProjectPat
 		// Iterate over each culture in the localisation object
 		for (const auto& CulturePair : (*LocalisationObject)->Values)
 		{
-			FString CultureCode(*CulturePair.Key);
+			FString CultureCode = CulturePair.Key;
 			const TSharedPtr<FJsonObject>* CultureObject;
 
 			if (CulturePair.Value->TryGetObject(CultureObject))
@@ -738,17 +668,14 @@ bool UYarnProjectFactory::ParseYarnProjectLocalization(const FString& ProjectPat
 
 bool UYarnProjectFactory::ParseLocalizationCSV(const FString& CSVPath, TMap<FString, FString>& OutStrings, FString& OutError)
 {
-	FString Content;
-	if (!FFileHelper::LoadFileToString(Content, *CSVPath))
+	TArray<FString> Lines;
+	if (!FFileHelper::LoadFileToStringArray(Lines, *CSVPath))
 	{
 		OutError = FString::Printf(TEXT("Failed to load CSV file: %s"), *CSVPath);
 		return false;
 	}
 
-	TArray<TArray<FString>> Records;
-	ParseCSVRecords(Content, Records);
-
-	if (Records.Num() == 0)
+	if (Lines.Num() == 0)
 	{
 		OutError = TEXT("CSV file is empty");
 		return false;
@@ -757,7 +684,8 @@ bool UYarnProjectFactory::ParseLocalizationCSV(const FString& CSVPath, TMap<FStr
 	// Parse header to find column indices
 	// Expected columns: language,id,text,file,node,lineNumber,lock,comment
 	// or: id,text,file,node,lineNumber (simpler format)
-	const TArray<FString>& HeaderFields = Records[0];
+	TArray<FString> HeaderFields;
+	ParseCSVLine(Lines[0], HeaderFields);
 
 	int32 IdIndex = INDEX_NONE;
 	int32 TextIndex = INDEX_NONE;
@@ -782,9 +710,13 @@ bool UYarnProjectFactory::ParseLocalizationCSV(const FString& CSVPath, TMap<FStr
 	}
 
 	// Parse data rows
-	for (int32 i = 1; i < Records.Num(); i++)
+	for (int32 i = 1; i < Lines.Num(); i++)
 	{
-		const TArray<FString>& Fields = Records[i];
+		const FString& Line = Lines[i];
+		if (Line.IsEmpty()) continue;
+
+		TArray<FString> Fields;
+		ParseCSVLine(Line, Fields);
 
 		if (Fields.Num() > FMath::Max(IdIndex, TextIndex))
 		{
@@ -801,87 +733,805 @@ bool UYarnProjectFactory::ParseLocalizationCSV(const FString& CSVPath, TMap<FStr
 	return true;
 }
 
-void UYarnProjectFactory::ParseCSVRecords(const FString& Content, TArray<TArray<FString>>& OutRecords)
+void UYarnProjectFactory::ParseCSVLine(const FString& Line, TArray<FString>& OutFields)
 {
-	OutRecords.Empty();
-
-	TArray<FString> Fields;
+	OutFields.Empty();
 	FString Current;
 	bool bInQuotes = false;
-	bool bRecordHasContent = false;
 
-	auto EndField = [&]()
+	for (int32 i = 0; i < Line.Len(); i++)
 	{
-		Fields.Add(Current);
-		Current.Reset();
-	};
-	auto EndRecord = [&]()
-	{
-		if (bRecordHasContent || !Current.IsEmpty() || Fields.Num() > 0)
+		TCHAR Char = Line[i];
+
+		if (Char == TEXT('"'))
 		{
-			EndField();
-			OutRecords.Add(MoveTemp(Fields));
-			Fields.Reset();
-		}
-		bRecordHasContent = false;
-	};
-
-	const int32 Len = Content.Len();
-	for (int32 i = 0; i < Len; i++)
-	{
-		const TCHAR C = Content[i];
-
-		if (bInQuotes)
-		{
-			if (C == TEXT('"'))
+			// Check for escaped quote
+			if (bInQuotes && i + 1 < Line.Len() && Line[i + 1] == TEXT('"'))
 			{
-				if (i + 1 < Len && Content[i + 1] == TEXT('"'))
-				{
-					Current.AppendChar(TEXT('"'));
-					i++;
-				}
-				else
-				{
-					bInQuotes = false;
-				}
+				Current.AppendChar(TEXT('"'));
+				i++; // Skip the next quote
 			}
 			else
 			{
-				Current.AppendChar(C);
+				bInQuotes = !bInQuotes;
 			}
-			bRecordHasContent = true;
-			continue;
 		}
-
-		switch (C)
+		else if (Char == TEXT(',') && !bInQuotes)
 		{
-		case TEXT('"'):
-			bInQuotes = true;
-			bRecordHasContent = true;
-			break;
-		case TEXT(','):
-			EndField();
-			bRecordHasContent = true;
-			break;
-		case TEXT('\r'):
-			if (i + 1 < Len && Content[i + 1] == TEXT('\n'))
-			{
-				continue;
-			}
-			EndRecord();
-			break;
-		case TEXT('\n'):
-			EndRecord();
-			break;
-		default:
-			Current.AppendChar(C);
-			bRecordHasContent = true;
-			break;
+			OutFields.Add(Current);
+			Current.Empty();
+		}
+		else
+		{
+			Current.AppendChar(Char);
 		}
 	}
-	EndRecord();
+
+	OutFields.Add(Current);
 }
 
 // Protobuf parser implementation
+
+FYarnProtobufParser::FYarnProtobufParser(const TArray<uint8>& InData)
+	: Data(InData)
+	, Position(0)
+{
+}
+
+uint64 FYarnProtobufParser::ReadVarint()
+{
+	uint64 Result = 0;
+	int32 Shift = 0;
+
+	while (Position < Data.Num())
+	{
+		uint8 Byte = Data[Position++];
+		Result |= static_cast<uint64>(Byte & 0x7F) << Shift;
+		if ((Byte & 0x80) == 0)
+		{
+			break;
+		}
+		Shift += 7;
+		// Protobuf spec limits varints to 10 bytes (70 bits) max
+		if (Shift > 63)
+		{
+			break;
+		}
+	}
+
+	return Result;
+}
+
+uint32 FYarnProtobufParser::ReadFixed32()
+{
+	if (Position + 4 > Data.Num())
+	{
+		return 0;
+	}
+
+	uint32 Result = Data[Position] |
+		(static_cast<uint32>(Data[Position + 1]) << 8) |
+		(static_cast<uint32>(Data[Position + 2]) << 16) |
+		(static_cast<uint32>(Data[Position + 3]) << 24);
+	Position += 4;
+	return Result;
+}
+
+uint64 FYarnProtobufParser::ReadFixed64()
+{
+	if (Position + 8 > Data.Num())
+	{
+		return 0;
+	}
+
+	uint64 Result = 0;
+	for (int32 i = 0; i < 8; i++)
+	{
+		Result |= static_cast<uint64>(Data[Position + i]) << (i * 8);
+	}
+	Position += 8;
+	return Result;
+}
+
+FString FYarnProtobufParser::ReadString()
+{
+	uint64 Length = ReadVarint();
+
+	// Bounds check - ensure we have enough data and position is valid
+	if (Position >= Data.Num() || Length > static_cast<uint64>(Data.Num() - Position))
+	{
+		Position = Data.Num(); // Move to end to stop parsing
+		return FString();
+	}
+
+	if (Length == 0)
+	{
+		return FString();
+	}
+
+	FString Result;
+	// Convert UTF-8 to FString
+	FUTF8ToTCHAR Converter(reinterpret_cast<const ANSICHAR*>(&Data[Position]), Length);
+	Result = FString(Converter.Length(), Converter.Get());
+	Position += Length;
+	return Result;
+}
+
+TArray<uint8> FYarnProtobufParser::ReadBytes()
+{
+	uint64 Length = ReadVarint();
+	TArray<uint8> Result;
+
+	// Bounds check - ensure we have enough data and position is valid
+	if (Position >= Data.Num() || Length > static_cast<uint64>(Data.Num() - Position))
+	{
+		Position = Data.Num(); // Move to end to stop parsing
+		return Result;
+	}
+
+	if (Length == 0)
+	{
+		return Result;
+	}
+
+	Result.Append(&Data[Position], Length);
+	Position += Length;
+	return Result;
+}
+
+void FYarnProtobufParser::SkipField(int32 WireType)
+{
+	switch (WireType)
+	{
+	case 0: // varint
+		ReadVarint();
+		break;
+	case 1: // 64-bit
+		if (Position + 8 <= Data.Num())
+		{
+			Position += 8;
+		}
+		else
+		{
+			Position = Data.Num();
+		}
+		break;
+	case 2: // length-delimited
+		{
+			uint64 Length = ReadVarint();
+			if (Position < Data.Num() && Length <= static_cast<uint64>(Data.Num() - Position))
+			{
+				Position += Length;
+			}
+			else
+			{
+				Position = Data.Num();
+			}
+		}
+		break;
+	case 5: // 32-bit
+		if (Position + 4 <= Data.Num())
+		{
+			Position += 4;
+		}
+		else
+		{
+			Position = Data.Num();
+		}
+		break;
+	default:
+		break;
+	}
+}
+
+bool FYarnProtobufParser::ParseProgram(FYarnProgram& OutProgram, FString& OutError)
+{
+	while (Position < Data.Num())
+	{
+		uint64 Tag = ReadVarint();
+		int32 FieldNumber = Tag >> 3;
+		int32 WireType = Tag & 0x7;
+
+		switch (FieldNumber)
+		{
+		case 1: // name
+			OutProgram.Name = ReadString();
+			break;
+
+		case 2: // nodes (map<string, Node>)
+			{
+				// Map entry is a submessage
+				TArray<uint8> EntryData = ReadBytes();
+				FYarnProtobufParser EntryParser(EntryData);
+
+				FString NodeName;
+				FYarnNode Node;
+
+				while (EntryParser.Position < EntryData.Num())
+				{
+					uint64 EntryTag = EntryParser.ReadVarint();
+					int32 EntryField = EntryTag >> 3;
+					int32 EntryWire = EntryTag & 0x7;
+
+					if (EntryField == 1) // key (string)
+					{
+						NodeName = EntryParser.ReadString();
+					}
+					else if (EntryField == 2) // value (Node)
+					{
+						TArray<uint8> NodeData = EntryParser.ReadBytes();
+						FYarnProtobufParser NodeParser(NodeData);
+						NodeParser.ParseNode(Node);
+					}
+					else
+					{
+						EntryParser.SkipField(EntryWire);
+					}
+				}
+
+				if (!NodeName.IsEmpty())
+				{
+					Node.Name = NodeName;
+					OutProgram.Nodes.Add(NodeName, Node);
+				}
+			}
+			break;
+
+		case 3: // initial_values (map<string, Operand>)
+			{
+				TArray<uint8> EntryData = ReadBytes();
+				FYarnProtobufParser EntryParser(EntryData);
+
+				FString VariableName;
+				FYarnValue Value;
+
+				while (EntryParser.Position < EntryData.Num())
+				{
+					uint64 EntryTag = EntryParser.ReadVarint();
+					int32 EntryField = EntryTag >> 3;
+					int32 EntryWire = EntryTag & 0x7;
+
+					if (EntryField == 1)
+					{
+						VariableName = EntryParser.ReadString();
+					}
+					else if (EntryField == 2)
+					{
+						TArray<uint8> OperandData = EntryParser.ReadBytes();
+						FYarnProtobufParser OperandParser(OperandData);
+						OperandParser.ParseOperand(Value);
+					}
+					else
+					{
+						EntryParser.SkipField(EntryWire);
+					}
+				}
+
+				if (!VariableName.IsEmpty())
+				{
+					OutProgram.InitialValues.Add(VariableName, Value);
+				}
+			}
+			break;
+
+		case 4: // language_version
+			OutProgram.LanguageVersion = static_cast<int32>(ReadVarint());
+			break;
+
+		default:
+			SkipField(WireType);
+			break;
+		}
+	}
+
+	return true;
+}
+
+bool FYarnProtobufParser::ParseNode(FYarnNode& OutNode)
+{
+	while (Position < Data.Num())
+	{
+		uint64 Tag = ReadVarint();
+		int32 FieldNumber = Tag >> 3;
+		int32 WireType = Tag & 0x7;
+
+		switch (FieldNumber)
+		{
+		case 1: // name
+			OutNode.Name = ReadString();
+			break;
+
+		case 6: // headers
+			{
+				TArray<uint8> HeaderData = ReadBytes();
+				FYarnProtobufParser HeaderParser(HeaderData);
+
+				FYarnHeader Header;
+				while (HeaderParser.Position < HeaderData.Num())
+				{
+					uint64 HeaderTag = HeaderParser.ReadVarint();
+					int32 HeaderField = HeaderTag >> 3;
+
+					if (HeaderField == 1)
+					{
+						Header.Key = HeaderParser.ReadString();
+					}
+					else if (HeaderField == 2)
+					{
+						Header.Value = HeaderParser.ReadString();
+					}
+					else
+					{
+						HeaderParser.SkipField(HeaderTag & 0x7);
+					}
+				}
+
+				OutNode.Headers.Add(Header);
+			}
+			break;
+
+		case 7: // instructions
+			{
+				TArray<uint8> InstructionData = ReadBytes();
+				FYarnProtobufParser InstructionParser(InstructionData);
+
+				FYarnInstruction Instruction;
+				InstructionParser.ParseInstruction(Instruction);
+				// Only add valid instructions (skip Invalid, e.g. from unsupported field tags like pushNull)
+				if (Instruction.Type != EYarnInstructionType::Invalid)
+				{
+					OutNode.Instructions.Add(Instruction);
+				}
+			}
+			break;
+
+		default:
+			SkipField(WireType);
+			break;
+		}
+	}
+
+	return true;
+}
+
+bool FYarnProtobufParser::ParseInstruction(FYarnInstruction& OutInstruction)
+{
+	// The instruction message uses oneof, so we need to parse the submessage
+	while (Position < Data.Num())
+	{
+		uint64 Tag = ReadVarint();
+		int32 FieldNumber = Tag >> 3;
+		int32 WireType = Tag & 0x7;
+
+		// Each field number corresponds to an instruction type
+		switch (FieldNumber)
+		{
+		case 1: // jumpTo
+			{
+				OutInstruction.Type = EYarnInstructionType::JumpTo;
+				TArray<uint8> SubData = ReadBytes();
+				FYarnProtobufParser SubParser(SubData);
+				while (SubParser.Position < SubData.Num())
+				{
+					uint64 SubTag = SubParser.ReadVarint();
+					if ((SubTag >> 3) == 1)
+					{
+						OutInstruction.IntOperand = static_cast<int32>(SubParser.ReadVarint());
+					}
+					else
+					{
+						SubParser.SkipField(SubTag & 0x7);
+					}
+				}
+			}
+			break;
+
+		case 2: // peekAndJump
+			OutInstruction.Type = EYarnInstructionType::PeekAndJump;
+			ReadBytes(); // Empty message
+			break;
+
+		case 3: // runLine
+			{
+				OutInstruction.Type = EYarnInstructionType::RunLine;
+				TArray<uint8> SubData = ReadBytes();
+				FYarnProtobufParser SubParser(SubData);
+				while (SubParser.Position < SubData.Num())
+				{
+					uint64 SubTag = SubParser.ReadVarint();
+					int32 SubField = SubTag >> 3;
+					if (SubField == 1)
+					{
+						OutInstruction.StringOperand = SubParser.ReadString();
+					}
+					else if (SubField == 2)
+					{
+						OutInstruction.IntOperand = static_cast<int32>(SubParser.ReadVarint());
+					}
+					else
+					{
+						SubParser.SkipField(SubTag & 0x7);
+					}
+				}
+			}
+			break;
+
+		case 4: // runCommand
+			{
+				OutInstruction.Type = EYarnInstructionType::RunCommand;
+				TArray<uint8> SubData = ReadBytes();
+				FYarnProtobufParser SubParser(SubData);
+				while (SubParser.Position < SubData.Num())
+				{
+					uint64 SubTag = SubParser.ReadVarint();
+					int32 SubField = SubTag >> 3;
+					if (SubField == 1)
+					{
+						OutInstruction.StringOperand = SubParser.ReadString();
+					}
+					else if (SubField == 2)
+					{
+						OutInstruction.IntOperand = static_cast<int32>(SubParser.ReadVarint());
+					}
+					else
+					{
+						SubParser.SkipField(SubTag & 0x7);
+					}
+				}
+			}
+			break;
+
+		case 5: // addOption
+			{
+				OutInstruction.Type = EYarnInstructionType::AddOption;
+				TArray<uint8> SubData = ReadBytes();
+				FYarnProtobufParser SubParser(SubData);
+				while (SubParser.Position < SubData.Num())
+				{
+					uint64 SubTag = SubParser.ReadVarint();
+					int32 SubField = SubTag >> 3;
+					if (SubField == 1)
+					{
+						OutInstruction.StringOperand = SubParser.ReadString();
+					}
+					else if (SubField == 2)
+					{
+						OutInstruction.IntOperand = static_cast<int32>(SubParser.ReadVarint());
+					}
+					else if (SubField == 3)
+					{
+						OutInstruction.IntOperand2 = static_cast<int32>(SubParser.ReadVarint());
+					}
+					else if (SubField == 4)
+					{
+						OutInstruction.BoolOperand = SubParser.ReadVarint() != 0;
+					}
+					else
+					{
+						SubParser.SkipField(SubTag & 0x7);
+					}
+				}
+			}
+			break;
+
+		case 6: // showOptions
+			OutInstruction.Type = EYarnInstructionType::ShowOptions;
+			ReadBytes();
+			break;
+
+		case 7: // pushString
+			{
+				OutInstruction.Type = EYarnInstructionType::PushString;
+				TArray<uint8> SubData = ReadBytes();
+				FYarnProtobufParser SubParser(SubData);
+				while (SubParser.Position < SubData.Num())
+				{
+					uint64 SubTag = SubParser.ReadVarint();
+					if ((SubTag >> 3) == 1)
+					{
+						OutInstruction.StringOperand = SubParser.ReadString();
+					}
+					else
+					{
+						SubParser.SkipField(SubTag & 0x7);
+					}
+				}
+			}
+			break;
+
+		case 8: // pushFloat
+			{
+				OutInstruction.Type = EYarnInstructionType::PushFloat;
+				TArray<uint8> SubData = ReadBytes();
+				FYarnProtobufParser SubParser(SubData);
+				while (SubParser.Position < SubData.Num())
+				{
+					uint64 SubTag = SubParser.ReadVarint();
+					if ((SubTag >> 3) == 1)
+					{
+						// Float is wire type 5 (fixed32)
+						uint32 Bits = SubParser.ReadFixed32();
+						OutInstruction.FloatOperand = *reinterpret_cast<float*>(&Bits);
+					}
+					else
+					{
+						SubParser.SkipField(SubTag & 0x7);
+					}
+				}
+			}
+			break;
+
+		case 9: // pushBool
+			{
+				OutInstruction.Type = EYarnInstructionType::PushBool;
+				TArray<uint8> SubData = ReadBytes();
+				FYarnProtobufParser SubParser(SubData);
+				while (SubParser.Position < SubData.Num())
+				{
+					uint64 SubTag = SubParser.ReadVarint();
+					if ((SubTag >> 3) == 1)
+					{
+						OutInstruction.BoolOperand = SubParser.ReadVarint() != 0;
+					}
+					else
+					{
+						SubParser.SkipField(SubTag & 0x7);
+					}
+				}
+			}
+			break;
+
+		case 10: // jumpIfFalse
+			{
+				OutInstruction.Type = EYarnInstructionType::JumpIfFalse;
+				TArray<uint8> SubData = ReadBytes();
+				FYarnProtobufParser SubParser(SubData);
+				while (SubParser.Position < SubData.Num())
+				{
+					uint64 SubTag = SubParser.ReadVarint();
+					if ((SubTag >> 3) == 1)
+					{
+						OutInstruction.IntOperand = static_cast<int32>(SubParser.ReadVarint());
+					}
+					else
+					{
+						SubParser.SkipField(SubTag & 0x7);
+					}
+				}
+			}
+			break;
+
+		case 11: // pop
+			OutInstruction.Type = EYarnInstructionType::Pop;
+			ReadBytes();
+			break;
+
+		case 12: // callFunc
+			{
+				OutInstruction.Type = EYarnInstructionType::CallFunction;
+				TArray<uint8> SubData = ReadBytes();
+				FYarnProtobufParser SubParser(SubData);
+				while (SubParser.Position < SubData.Num())
+				{
+					uint64 SubTag = SubParser.ReadVarint();
+					if ((SubTag >> 3) == 1)
+					{
+						OutInstruction.StringOperand = SubParser.ReadString();
+					}
+					else
+					{
+						SubParser.SkipField(SubTag & 0x7);
+					}
+				}
+			}
+			break;
+
+		case 13: // pushVariable
+			{
+				OutInstruction.Type = EYarnInstructionType::PushVariable;
+				TArray<uint8> SubData = ReadBytes();
+				FYarnProtobufParser SubParser(SubData);
+				while (SubParser.Position < SubData.Num())
+				{
+					uint64 SubTag = SubParser.ReadVarint();
+					if ((SubTag >> 3) == 1)
+					{
+						OutInstruction.StringOperand = SubParser.ReadString();
+					}
+					else
+					{
+						SubParser.SkipField(SubTag & 0x7);
+					}
+				}
+			}
+			break;
+
+		case 14: // storeVariable
+			{
+				OutInstruction.Type = EYarnInstructionType::StoreVariable;
+				TArray<uint8> SubData = ReadBytes();
+				FYarnProtobufParser SubParser(SubData);
+				while (SubParser.Position < SubData.Num())
+				{
+					uint64 SubTag = SubParser.ReadVarint();
+					if ((SubTag >> 3) == 1)
+					{
+						OutInstruction.StringOperand = SubParser.ReadString();
+					}
+					else
+					{
+						SubParser.SkipField(SubTag & 0x7);
+					}
+				}
+			}
+			break;
+
+		case 15: // stop
+			OutInstruction.Type = EYarnInstructionType::Stop;
+			ReadBytes();
+			break;
+
+		case 16: // runNode
+			{
+				OutInstruction.Type = EYarnInstructionType::RunNode;
+				TArray<uint8> SubData = ReadBytes();
+				FYarnProtobufParser SubParser(SubData);
+				while (SubParser.Position < SubData.Num())
+				{
+					uint64 SubTag = SubParser.ReadVarint();
+					if ((SubTag >> 3) == 1)
+					{
+						OutInstruction.StringOperand = SubParser.ReadString();
+					}
+					else
+					{
+						SubParser.SkipField(SubTag & 0x7);
+					}
+				}
+			}
+			break;
+
+		case 17: // peekAndRunNode
+			OutInstruction.Type = EYarnInstructionType::PeekAndRunNode;
+			ReadBytes();
+			break;
+
+		case 18: // detourToNode
+			{
+				OutInstruction.Type = EYarnInstructionType::DetourToNode;
+				TArray<uint8> SubData = ReadBytes();
+				FYarnProtobufParser SubParser(SubData);
+				while (SubParser.Position < SubData.Num())
+				{
+					uint64 SubTag = SubParser.ReadVarint();
+					if ((SubTag >> 3) == 1)
+					{
+						OutInstruction.StringOperand = SubParser.ReadString();
+					}
+					else
+					{
+						SubParser.SkipField(SubTag & 0x7);
+					}
+				}
+			}
+			break;
+
+		case 19: // peekAndDetourToNode
+			OutInstruction.Type = EYarnInstructionType::PeekAndDetourToNode;
+			ReadBytes();
+			break;
+
+		case 20: // return
+			OutInstruction.Type = EYarnInstructionType::Return;
+			ReadBytes();
+			break;
+
+		case 21: // addSaliencyCandidate
+			{
+				OutInstruction.Type = EYarnInstructionType::AddSaliencyCandidate;
+				TArray<uint8> SubData = ReadBytes();
+				FYarnProtobufParser SubParser(SubData);
+				while (SubParser.Position < SubData.Num())
+				{
+					uint64 SubTag = SubParser.ReadVarint();
+					int32 SubField = SubTag >> 3;
+					if (SubField == 1)
+					{
+						OutInstruction.StringOperand = SubParser.ReadString();
+					}
+					else if (SubField == 2)
+					{
+						OutInstruction.IntOperand2 = static_cast<int32>(SubParser.ReadVarint());
+					}
+					else if (SubField == 3)
+					{
+						OutInstruction.IntOperand = static_cast<int32>(SubParser.ReadVarint());
+					}
+					else
+					{
+						SubParser.SkipField(SubTag & 0x7);
+					}
+				}
+			}
+			break;
+
+		case 22: // addSaliencyCandidateFromNode
+			{
+				OutInstruction.Type = EYarnInstructionType::AddSaliencyCandidateFromNode;
+				TArray<uint8> SubData = ReadBytes();
+				FYarnProtobufParser SubParser(SubData);
+				while (SubParser.Position < SubData.Num())
+				{
+					uint64 SubTag = SubParser.ReadVarint();
+					int32 SubField = SubTag >> 3;
+					if (SubField == 1)
+					{
+						OutInstruction.StringOperand = SubParser.ReadString();
+					}
+					else if (SubField == 2)
+					{
+						OutInstruction.IntOperand = static_cast<int32>(SubParser.ReadVarint());
+					}
+					else
+					{
+						SubParser.SkipField(SubTag & 0x7);
+					}
+				}
+			}
+			break;
+
+		case 23: // selectSaliencyCandidate
+			OutInstruction.Type = EYarnInstructionType::SelectSaliencyCandidate;
+			ReadBytes();
+			break;
+
+		case 24: // pushNull - not in proto v2 instruction set, compiler never generates this
+			UE_LOG(LogYarnSpinner, Warning, TEXT("Encountered field tag 24 (pushNull) which is not in the v2 instruction set - ignoring"));
+			ReadBytes();  // Consume bytes but don't create an instruction
+			OutInstruction.Type = EYarnInstructionType::Invalid;
+			break;
+
+		default:
+			SkipField(WireType);
+			break;
+		}
+	}
+
+	return true;
+}
+
+bool FYarnProtobufParser::ParseOperand(FYarnValue& OutValue)
+{
+	while (Position < Data.Num())
+	{
+		uint64 Tag = ReadVarint();
+		int32 FieldNumber = Tag >> 3;
+		int32 WireType = Tag & 0x7;
+
+		switch (FieldNumber)
+		{
+		case 1: // string_value
+			OutValue = FYarnValue(ReadString());
+			break;
+
+		case 2: // bool_value
+			OutValue = FYarnValue(ReadVarint() != 0);
+			break;
+
+		case 3: // float_value
+			{
+				uint32 Bits = ReadFixed32();
+				OutValue = FYarnValue(*reinterpret_cast<float*>(&Bits));
+			}
+			break;
+
+		default:
+			SkipField(WireType);
+			break;
+		}
+	}
+
+	return true;
+}
 
 #undef LOCTEXT_NAMESPACE

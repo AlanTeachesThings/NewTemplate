@@ -238,10 +238,11 @@ bool UYarnBlueprintLibrary::GetVariableAsString(UYarnDialogueRunner* DialogueRun
         return false;
     }
 
+    // GetStringValue works for any type; numbers and bools get converted
     FYarnValue Value;
     if (IYarnVariableStorage::Execute_TryGetValue(Storage.GetObject(), VariableName, Value))
     {
-        OutValue = Value.ConvertToString();
+        OutValue = Value.GetStringValue();
         return true;
     }
 

@@ -155,7 +155,7 @@ TArray<FString> UYarnDebugWidget::GetFormattedVariables() const
 UYarnDebugHUDComponent::UYarnDebugHUDComponent()
 {
     PrimaryComponentTick.bCanEverTick = true;
-    PrimaryComponentTick.bStartWithTickEnabled = false;
+    PrimaryComponentTick.bStartWithTickEnabled = true;
 }
 
 void UYarnDebugHUDComponent::BeginPlay()
@@ -170,8 +170,6 @@ void UYarnDebugHUDComponent::BeginPlay()
 
     SetupEventBindings();
 
-    SetComponentTickEnabled(DialogueRunner != nullptr && (bShowByDefault || ToggleKey.IsValid()));
-
     if (bShowByDefault)
     {
         ShowDebugHUD();
@@ -181,15 +179,6 @@ void UYarnDebugHUDComponent::BeginPlay()
 void UYarnDebugHUDComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
     HideDebugHUD();
-
-    if (DialogueRunner)
-    {
-        DialogueRunner->OnNodeStart.RemoveDynamic(this, &UYarnDebugHUDComponent::OnNodeStarted);
-        DialogueRunner->OnNodeComplete.RemoveDynamic(this, &UYarnDebugHUDComponent::OnNodeCompleted);
-        DialogueRunner->OnDialogueStart.RemoveDynamic(this, &UYarnDebugHUDComponent::OnDialogueStarted);
-        DialogueRunner->OnDialogueComplete.RemoveDynamic(this, &UYarnDebugHUDComponent::OnDialogueCompleted);
-    }
-
     Super::EndPlay(EndPlayReason);
 }
 
@@ -197,9 +186,7 @@ void UYarnDebugHUDComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 {
     Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-#if !UE_BUILD_SHIPPING
     CheckToggleInput();
-#endif
 }
 
 void UYarnDebugHUDComponent::SetupEventBindings()
@@ -268,9 +255,6 @@ void UYarnDebugHUDComponent::ToggleDebugHUD()
 
 void UYarnDebugHUDComponent::ShowDebugHUD()
 {
-#if UE_BUILD_SHIPPING
-    return;
-#else
     if (bIsVisible)
     {
         return;
@@ -286,7 +270,6 @@ void UYarnDebugHUDComponent::ShowDebugHUD()
 
         UE_LOG(LogYarnSpinner, Log, TEXT("Yarn Debug HUD shown"));
     }
-#endif
 }
 
 void UYarnDebugHUDComponent::HideDebugHUD()

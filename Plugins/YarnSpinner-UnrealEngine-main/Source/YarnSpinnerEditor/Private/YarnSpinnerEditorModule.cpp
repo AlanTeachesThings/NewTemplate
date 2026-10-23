@@ -17,42 +17,32 @@
 
 #include "YarnSpinnerEditorModule.h"
 #include "YarnSpinnerModule.h"
+#include "AssetTypeActions_YarnProject.h"
+#include "AssetToolsModule.h"
+#include "IAssetTools.h"
 #include "Styling/SlateStyleRegistry.h"
 #include "Styling/SlateStyle.h"
-#include "Brushes/SlateImageBrush.h"
 #include "Interfaces/IPluginManager.h"
 #include "DirectoryWatcherModule.h"
 #include "IDirectoryWatcher.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "YarnProgram.h"
-#include "YarnYSLSGenerator.h"
-#include "YarnEditorPaths.h"
-#include "YarnBrandedDetails.h"
-#include "YarnNodeReferenceCustomization.h"
-#include "YarnPresenterReferenceCustomization.h"
-#include "PropertyEditorModule.h"
 #include "EditorReimportHandler.h"
 #include "Editor.h"
-#include "Misc/CoreDelegates.h"
-#include "Misc/EngineVersionComparison.h"
-#include "UObject/Reload.h"
-#include "UObject/UObjectGlobals.h"
 
 #define LOCTEXT_NAMESPACE "FYarnSpinnerEditorModule"
 
 void FYarnSpinnerEditorModule::StartupModule()
 {
+	RegisterAssetTypes();
 	RegisterStyleSet();
-	RegisterDetailsCustomizations();
 	SetupSourceFileWatchers();
-	SetupYSLSRegenerationHooks();
 }
 
 void FYarnSpinnerEditorModule::ShutdownModule()
 {
-	TeardownYSLSRegenerationHooks();
 	TeardownSourceFileWatchers();
-	UnregisterDetailsCustomizations();
+	UnregisterAssetTypes();
 	UnregisterStyleSet();
 }
 
@@ -66,16 +56,42 @@ bool FYarnSpinnerEditorModule::IsAvailable()
 	return FModuleManager::Get().IsModuleLoaded("YarnSpinnerEditor");
 }
 
+void FYarnSpinnerEditorModule::RegisterAssetTypes()
+{
+	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+
+	// Register yarn project asset type
+	TSharedPtr<IAssetTypeActions> YarnProjectActions = MakeShareable(new FAssetTypeActions_YarnProject());
+	AssetTools.RegisterAssetTypeActions(YarnProjectActions.ToSharedRef());
+	RegisteredAssetTypeActions.Add(YarnProjectActions);
+
+	// Register yarn source file asset type
+	TSharedPtr<IAssetTypeActions> YarnSourceFileActions = MakeShareable(new FAssetTypeActions_YarnSourceFile());
+	AssetTools.RegisterAssetTypeActions(YarnSourceFileActions.ToSharedRef());
+	RegisteredAssetTypeActions.Add(YarnSourceFileActions);
+}
+
+void FYarnSpinnerEditorModule::UnregisterAssetTypes()
+{
+	if (FModuleManager::Get().IsModuleLoaded("AssetTools"))
+	{
+		IAssetTools& AssetTools = FModuleManager::GetModuleChecked<FAssetToolsModule>("AssetTools").Get();
+		for (TSharedPtr<IAssetTypeActions>& Action : RegisteredAssetTypeActions)
+		{
+			if (Action.IsValid())
+			{
+				AssetTools.UnregisterAssetTypeActions(Action.ToSharedRef());
+			}
+		}
+	}
+	RegisteredAssetTypeActions.Empty();
+}
+
 void FYarnSpinnerEditorModule::RegisterStyleSet()
 {
 	// Find the plugin content directory
-	TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin("YarnSpinner");
-	if (!Plugin.IsValid())
-	{
-		UE_LOG(LogYarnSpinner, Warning, TEXT("YarnSpinner: plugin descriptor not found - icons will not be registered"));
-		return;
-	}
-	FString ResourcesDir = Plugin->GetBaseDir() / TEXT("Resources");
+	FString PluginBaseDir = IPluginManager::Get().FindPlugin("YarnSpinner")->GetBaseDir();
+	FString ResourcesDir = PluginBaseDir / TEXT("Resources");
 
 	// Create the style set
 	StyleSet = MakeShareable(new FSlateStyleSet("YarnSpinnerStyle"));
@@ -93,70 +109,7 @@ void FYarnSpinnerEditorModule::RegisterStyleSet()
 	StyleSet->Set("ClassIcon.YarnSourceFile", new FSlateImageBrush(ResourcesDir / TEXT("yarn-file.png"), Icon16x16));
 	StyleSet->Set("ClassThumbnail.YarnSourceFile", new FSlateImageBrush(ResourcesDir / TEXT("yarn-file.png"), Icon64x64));
 
-	auto SetClassIcons = [this, &Icon16x16, &Icon64x64, &ResourcesDir](const TCHAR* ClassName, const TCHAR* SvgFile)
-	{
-		StyleSet->Set(*FString::Printf(TEXT("ClassIcon.%s"), ClassName), new FSlateVectorImageBrush(ResourcesDir / SvgFile, Icon16x16));
-		StyleSet->Set(*FString::Printf(TEXT("ClassThumbnail.%s"), ClassName), new FSlateVectorImageBrush(ResourcesDir / SvgFile, Icon64x64));
-	};
-
-	SetClassIcons(TEXT("YarnDialogueRunner"), TEXT("dialogue_runner.svg"));
-	SetClassIcons(TEXT("YarnDialoguePresenter"), TEXT("dialogue_presenter.svg"));
-	SetClassIcons(TEXT("YarnWidgetPresenter"), TEXT("dialogue_presenter.svg"));
-	SetClassIcons(TEXT("YarnLinePresenter"), TEXT("line_presenter.svg"));
-	SetClassIcons(TEXT("YarnOptionsPresenter"), TEXT("options_presenter.svg"));
-	SetClassIcons(TEXT("YarnVoiceOverPresenter"), TEXT("voice_over_presenter.svg"));
-	SetClassIcons(TEXT("YarnInputHandler"), TEXT("line_advancer.svg"));
-	SetClassIcons(TEXT("YarnDialogueWidget"), TEXT("dialogue_view.svg"));
-
-	StyleSet->Set("YarnSpinner.Logo", new FSlateImageBrush(ResourcesDir / TEXT("YarnSpinnerLogo.png"), FVector2D(112.5f, 18.0f)));
-
 	FSlateStyleRegistry::RegisterSlateStyle(*StyleSet.Get());
-}
-
-void FYarnSpinnerEditorModule::RegisterDetailsCustomizations()
-{
-	FPropertyEditorModule& PropertyModule = FModuleManager::LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
-	for (const FName ClassName : { FName("YarnDialogueRunner"), FName("YarnDialoguePresenter"), FName("YarnInputHandler") })
-	{
-		PropertyModule.RegisterCustomClassLayout(ClassName, FOnGetDetailCustomizationInstance::CreateStatic(&FYarnBrandedDetails::MakeInstance));
-		CustomizedClassNames.Add(ClassName);
-	}
-
-	PropertyModule.RegisterCustomPropertyTypeLayout(
-		FName("YarnNodeReference"),
-		FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FYarnNodeReferenceCustomization::MakeInstance));
-	CustomizedPropertyTypeNames.Add(FName("YarnNodeReference"));
-
-	PresenterPickerIdentifier = MakeShared<FYarnPresenterPickerIdentifier>();
-	PropertyModule.RegisterCustomPropertyTypeLayout(
-		FName("ComponentReference"),
-		FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FYarnPresenterReferenceCustomization::MakeInstance),
-		PresenterPickerIdentifier);
-
-	PropertyModule.NotifyCustomizationModuleChanged();
-}
-
-void FYarnSpinnerEditorModule::UnregisterDetailsCustomizations()
-{
-	if (FModuleManager::Get().IsModuleLoaded("PropertyEditor"))
-	{
-		FPropertyEditorModule& PropertyModule = FModuleManager::GetModuleChecked<FPropertyEditorModule>("PropertyEditor");
-		for (const FName ClassName : CustomizedClassNames)
-		{
-			PropertyModule.UnregisterCustomClassLayout(ClassName);
-		}
-		for (const FName PropertyTypeName : CustomizedPropertyTypeNames)
-		{
-			PropertyModule.UnregisterCustomPropertyTypeLayout(PropertyTypeName);
-		}
-		if (PresenterPickerIdentifier.IsValid())
-		{
-			PropertyModule.UnregisterCustomPropertyTypeLayout(FName("ComponentReference"), PresenterPickerIdentifier);
-		}
-	}
-	CustomizedClassNames.Empty();
-	CustomizedPropertyTypeNames.Empty();
-	PresenterPickerIdentifier.Reset();
 }
 
 void FYarnSpinnerEditorModule::UnregisterStyleSet()
@@ -182,7 +135,8 @@ void FYarnSpinnerEditorModule::SetupSourceFileWatchers()
 	{
 		if (AssetData.AssetClassPath == UYarnProject::StaticClass()->GetClassPathName())
 		{
-			if (GEditor && GEditor->IsTimerManagerValid())
+			// Delay rebuild slightly so the asset is fully loaded
+			if (GEditor)
 			{
 				GEditor->GetTimerManager()->SetTimer(RebuildTimerHandle, FTimerDelegate::CreateLambda([this]()
 				{
@@ -203,7 +157,7 @@ void FYarnSpinnerEditorModule::SetupSourceFileWatchers()
 	// Do initial build once the asset registry has finished loading
 	if (AssetRegistry.IsLoadingAssets())
 	{
-		FilesLoadedHandle = AssetRegistry.OnFilesLoaded().AddLambda([this]()
+		AssetRegistry.OnFilesLoaded().AddLambda([this]()
 		{
 			RebuildWatcherState();
 		});
@@ -262,11 +216,6 @@ void FYarnSpinnerEditorModule::TeardownSourceFileWatchers()
 			AssetRegistry.OnAssetRemoved().Remove(AssetRemovedHandle);
 			AssetRemovedHandle.Reset();
 		}
-		if (FilesLoadedHandle.IsValid())
-		{
-			AssetRegistry.OnFilesLoaded().Remove(FilesLoadedHandle);
-			FilesLoadedHandle.Reset();
-		}
 	}
 }
 
@@ -310,7 +259,8 @@ void FYarnSpinnerEditorModule::RebuildWatcherState()
 		// Map source .yarn files to this project
 		for (const FString& SourceFile : Project->ResolvedSourceFiles)
 		{
-			FString NormalizedPath = YarnEditorPaths::NormalizeToAbsolute(SourceFile);
+			FString NormalizedPath = SourceFile;
+			FPaths::NormalizeFilename(NormalizedPath);
 
 			SourceFileToProjects.FindOrAdd(NormalizedPath).AddUnique(TWeakObjectPtr<UYarnProject>(Project));
 
@@ -321,7 +271,8 @@ void FYarnSpinnerEditorModule::RebuildWatcherState()
 		// Map the .yarnproject file itself
 		if (!Project->SourceProjectPath.IsEmpty())
 		{
-			FString NormalizedProjectPath = YarnEditorPaths::NormalizeToAbsolute(Project->SourceProjectPath);
+			FString NormalizedProjectPath = Project->SourceProjectPath;
+			FPaths::NormalizeFilename(NormalizedProjectPath);
 			ProjectFileToAsset.Add(NormalizedProjectPath, TWeakObjectPtr<UYarnProject>(Project));
 
 			// Also watch the directory containing the .yarnproject
@@ -363,7 +314,8 @@ void FYarnSpinnerEditorModule::OnSourceDirectoryChanged(const TArray<FFileChange
 
 	for (const FFileChangeData& Change : Changes)
 	{
-		FString ChangedPath = YarnEditorPaths::NormalizeToAbsolute(Change.Filename);
+		FString ChangedPath = FPaths::ConvertRelativePathToFull(Change.Filename);
+		FPaths::NormalizeFilename(ChangedPath);
 
 		// Check .yarnproject FIRST (since ".yarnproject" also ends with ".yarn")
 		if (ChangedPath.EndsWith(TEXT(".yarnproject")))
@@ -442,91 +394,6 @@ void FYarnSpinnerEditorModule::ExecutePendingReimports()
 
 	// Rebuild watcher state since reimport may have resolved new source files
 	RebuildWatcherState();
-}
-
-static auto& PostEngineInitDelegate()
-{
-#if UE_VERSION_OLDER_THAN(5, 8, 0)
-	return FCoreDelegates::OnPostEngineInit;
-#else
-	return FCoreDelegates::GetOnPostEngineInit();
-#endif
-}
-
-// ============================================================================
-
-void FYarnSpinnerEditorModule::SetupYSLSRegenerationHooks()
-{
-	PostEngineInitHandle = PostEngineInitDelegate().AddLambda([this]()
-	{
-		if (GEditor)
-		{
-			BlueprintCompiledHandle = GEditor->OnBlueprintCompiled().AddRaw(this, &FYarnSpinnerEditorModule::ScheduleYSLSRegeneration);
-		}
-
-		ReloadCompleteHandle = FCoreUObjectDelegates::ReloadCompleteDelegate.AddLambda([this](EReloadCompleteReason)
-		{
-			ScheduleYSLSRegeneration();
-		});
-	});
-}
-
-void FYarnSpinnerEditorModule::TeardownYSLSRegenerationHooks()
-{
-	if (PostEngineInitHandle.IsValid())
-	{
-		PostEngineInitDelegate().Remove(PostEngineInitHandle);
-		PostEngineInitHandle.Reset();
-	}
-
-	if (BlueprintCompiledHandle.IsValid() && GEditor)
-	{
-		GEditor->OnBlueprintCompiled().Remove(BlueprintCompiledHandle);
-		BlueprintCompiledHandle.Reset();
-	}
-
-	if (ReloadCompleteHandle.IsValid())
-	{
-		FCoreUObjectDelegates::ReloadCompleteDelegate.Remove(ReloadCompleteHandle);
-		ReloadCompleteHandle.Reset();
-	}
-
-	if (GEditor && YSLSTimerHandle.IsValid())
-	{
-		GEditor->GetTimerManager()->ClearTimer(YSLSTimerHandle);
-	}
-}
-
-void FYarnSpinnerEditorModule::ScheduleYSLSRegeneration()
-{
-	if (!GEditor || !GEditor->IsTimerManagerValid())
-	{
-		return;
-	}
-
-	GEditor->GetTimerManager()->SetTimer(
-		YSLSTimerHandle,
-		FTimerDelegate::CreateRaw(this, &FYarnSpinnerEditorModule::ExecuteYSLSRegeneration),
-		1.0f,
-		false
-	);
-}
-
-void FYarnSpinnerEditorModule::ExecuteYSLSRegeneration()
-{
-	TArray<FString> ProjectPaths;
-	for (const auto& Pair : ProjectFileToAsset)
-	{
-		if (Pair.Value.IsValid())
-		{
-			ProjectPaths.Add(Pair.Key);
-		}
-	}
-
-	if (ProjectPaths.Num() > 0)
-	{
-		FYarnYSLSGenerator::GenerateForProjects(ProjectPaths);
-	}
 }
 
 #undef LOCTEXT_NAMESPACE

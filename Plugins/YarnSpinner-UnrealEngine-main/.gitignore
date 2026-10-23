@@ -1,10 +1,12 @@
 # Unreal Engine
 
 # Build artifacts
-Binaries/
+!Binaries/
 Intermediate/
-Build/
 DerivedDataCache/
+
+# Whitelist DLLS?
+!*.dll
 
 # Saved data
 Saved/
@@ -38,24 +40,4 @@ Desktop.ini
 # Linux
 *~
 
-# Compiled Object files
-*.o
-*.obj
 
-# Precompiled Headers
-*.gch
-*.pch
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-
-# Compiled Static libraries
-*.lib
-*.a
-
-# Executables
-*.exe
-*.out
-*.app

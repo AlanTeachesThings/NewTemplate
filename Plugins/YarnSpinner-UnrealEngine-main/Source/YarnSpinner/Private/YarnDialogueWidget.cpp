@@ -155,7 +155,7 @@ void UYarnDialogueWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaT
 	{
 		TypewriterTimer += InDeltaTime;
 
-		const float CharTime = 1.0f / FMath::Max(TypewriterSpeed, 1.0f);
+		float CharTime = 1.0f / TypewriterSpeed;
 		while (TypewriterTimer >= CharTime && CurrentCharIndex < FullDialogueText.Len())
 		{
 			TypewriterTimer -= CharTime;
@@ -176,8 +176,6 @@ void UYarnDialogueWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaT
 			{
 				ContinueIndicator->SetVisibility(ESlateVisibility::Visible);
 			}
-
-			OnTypewriterFinished.Broadcast();
 		}
 	}
 }
@@ -316,8 +314,6 @@ void UYarnDialogueWidget::ShowLine(const FString& CharacterName, const FString& 
 				ContinueIndicator->SetVisibility(ESlateVisibility::Visible);
 			}
 		}
-
-		OnTypewriterFinished.Broadcast();
 	}
 }
 
@@ -367,7 +363,7 @@ void UYarnDialogueWidget::ShowOptions(const TArray<FYarnOption>& Options)
 				[
 					SNew(SButton)
 					.IsEnabled(Option.bIsAvailable)
-					.OnClicked(FOnClicked::CreateUObject(this, &UYarnDialogueWidget::OnOptionClicked, i))
+					.OnClicked_Lambda([this, i]() { return OnOptionClicked(i); })
 					.ContentPadding(FMargin(20, 12))
 					.ButtonColorAndOpacity(FSlateColor(ButtonBgColor))
 					.HAlign(HAlign_Fill)
@@ -388,11 +384,6 @@ void UYarnDialogueWidget::ShowOptions(const TArray<FYarnOption>& Options)
 		// Use UMG widgets - Blueprint will handle this
 		OptionsContainer->SetVisibility(ESlateVisibility::Visible);
 	}
-
-	// Take keyboard focus only while options are up, so arrow-key/gamepad
-	// navigation and the 1-9 shortcuts work. Focus is released again in
-	// HideOptions().
-	SetKeyboardFocus();
 }
 
 void UYarnDialogueWidget::HideOptions()
@@ -406,20 +397,6 @@ void UYarnDialogueWidget::HideOptions()
 	{
 		OptionsContainer->SetVisibility(ESlateVisibility::Collapsed);
 	}
-
-	// Return keyboard focus to the game viewport so player bindings work
-	// again during line playback. GameAndUI with no focus widget focuses
-	// the viewport.
-	if (GetVisibility() != ESlateVisibility::Collapsed)
-	{
-		if (APlayerController* PC = GetOwningPlayer())
-		{
-			FInputModeGameAndUI InputMode;
-			InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
-			InputMode.SetHideCursorDuringCapture(false);
-			PC->SetInputMode(InputMode);
-		}
-	}
 }
 
 void UYarnDialogueWidget::ShowDialogue()
@@ -427,18 +404,16 @@ void UYarnDialogueWidget::ShowDialogue()
 	UE_LOG(LogYarnSpinner, Log, TEXT("YarnDialogueWidget::ShowDialogue"));
 	SetVisibility(ESlateVisibility::Visible);
 
-	// Show mouse cursor and set UI input mode. Deliberately do NOT focus
-	// this widget here: with a focused widget, GameAndUI routes every key
-	// to it and the player's own bindings (advance keys, debug keys — all
-	// keyboard input) go dead for the whole conversation. Keyboard focus
-	// is only taken while options are on screen, so gamepad/keyboard
-	// navigation of options still works.
+	// Set focus to this widget for keyboard input
+	SetKeyboardFocus();
+
+	// Show mouse cursor and set UI input mode
 	if (APlayerController* PC = GetOwningPlayer())
 	{
 		PC->bShowMouseCursor = true;
 		FInputModeGameAndUI InputMode;
+		InputMode.SetWidgetToFocus(TakeWidget());
 		InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
-		InputMode.SetHideCursorDuringCapture(false);
 		PC->SetInputMode(InputMode);
 	}
 }
@@ -480,8 +455,6 @@ void UYarnDialogueWidget::SkipTypewriter()
 				ContinueIndicator->SetVisibility(ESlateVisibility::Visible);
 			}
 		}
-
-		OnTypewriterFinished.Broadcast();
 	}
 }
 
