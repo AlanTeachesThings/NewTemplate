@@ -23,9 +23,12 @@ Jack: I don't use it, that's why the camera focuses on me.
 OptionsGuy: *ahem* #OffScreen
 OptionsGuy: I'm just here to test the Options system
 ->  Looks like it's working.
+    OptionsGuy: Here's a second line to test if that's the problem
     OptionsGuy: Well, that's good to know
 ->  I think it's still broken.
+    OptionsGuy: Here's a second line to test if that's the problem
     OptionsGuy: That's annoying!
+
 
 ===
 title: Jack
